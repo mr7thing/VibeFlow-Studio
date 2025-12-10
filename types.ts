@@ -23,15 +23,47 @@ export interface CanvasConfig {
   fps: number;
 }
 
+export enum LyricEffect {
+  NONE = 'none',
+  FADE_UP = 'fade_up',
+  TYPEWRITER = 'typewriter',
+  KARAOKE = 'karaoke',
+  BREATHING = 'breathing',
+  SCATTER = 'scatter',
+}
+
 export interface LyricStyle {
   fontSize: number;
   fontFamily: string;
-  fontColor: string;
-  activeColor: string;
+  fontColor: string; // Inactive line color
+  activeColor: string; // Active line color
   shadowColor: string;
   shadowBlur: number;
+  // New properties
   positionY: number; // 0 to 1 (percentage of height)
+  positionX: number; // 0 to 1 (percentage of width)
   bgOverlayOpacity: number;
+  glowColor: string;
+  glowBlur: number;
+  animationEffect: LyricEffect;
+}
+
+export enum TitleLayoutMode {
+  CENTERED = 'centered',
+  VERTICAL_RIGHT = 'vertical_right',
+  CINEMATIC = 'cinematic',
+}
+
+export interface TitleConfig {
+  enabled: boolean;
+  layoutMode: TitleLayoutMode;
+  duration: number; // seconds
+  title: string;
+  subtitle: string; // e.g. Album name or secondary title
+  artist: string;
+  author: string; // Lyrics by
+  composer: string; // Music by
+  producer: string;
 }
 
 export enum AspectRatio {

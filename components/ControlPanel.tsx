@@ -1,7 +1,7 @@
 
-import React, { useRef } from 'react';
-import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy } from 'lucide-react';
-import { BackgroundMedia, MediaType, LyricStyle, AspectRatio } from '../types';
+import React, { useRef, useState } from 'react';
+import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy, Sparkles, MoveHorizontal, MoveVertical, Heading, Layers } from 'lucide-react';
+import { BackgroundMedia, MediaType, LyricStyle, AspectRatio, LyricEffect } from '../types';
 
 interface ControlPanelProps {
   onAudioUpload: (file: File) => void;
@@ -11,12 +11,20 @@ interface ControlPanelProps {
   onRemoveBackground: (id: string) => void;
   onDuplicateBackground: (id: string) => void;
   onUpdateBackgroundDuration: (id: string, duration: number) => void;
+  
+  // Lyric Style
   lyricStyle: LyricStyle;
   setLyricStyle: (style: LyricStyle) => void;
+  
+  // Title Style
+  titleStyle: LyricStyle;
+  setTitleStyle: (style: LyricStyle) => void;
+
   aspectRatio: AspectRatio;
   setAspectRatio: (ar: AspectRatio) => void;
   audioFileName?: string;
   onOpenLyricEditor: () => void;
+  onOpenTitleEditor: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -29,14 +37,24 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onUpdateBackgroundDuration,
   lyricStyle,
   setLyricStyle,
+  titleStyle,
+  setTitleStyle,
   aspectRatio,
   setAspectRatio,
   audioFileName,
   onOpenLyricEditor,
+  onOpenTitleEditor,
 }) => {
   const audioInputRef = useRef<HTMLInputElement>(null);
   const lrcInputRef = useRef<HTMLInputElement>(null);
   const bgInputRef = useRef<HTMLInputElement>(null);
+
+  // Toggle state: 'lyric' or 'title'
+  const [styleMode, setStyleMode] = useState<'lyric' | 'title'>('lyric');
+
+  // Helper to get current style object based on mode
+  const currentStyle = styleMode === 'lyric' ? lyricStyle : titleStyle;
+  const setCurrentStyle = styleMode === 'lyric' ? setLyricStyle : setTitleStyle;
 
   const handleLrcFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -72,10 +90,12 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </button>
             <input type="file" ref={audioInputRef} onChange={(e) => e.target.files?.[0] && onAudioUpload(e.target.files[0])} accept="audio/*" className="hidden" />
 
+            {/* Lyric & Title Actions */}
             <div className="flex gap-2">
                 <button 
                   onClick={() => lrcInputRef.current?.click()}
                   className="flex-1 flex items-center justify-center gap-2 p-2 rounded bg-gray-800 hover:bg-gray-700 transition text-sm border border-gray-700"
+                  title="Import LRC File"
                 >
                   <FileText size={16} className="text-green-400" />
                   <span>Import LRC</span>
@@ -89,6 +109,14 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 </button>
             </div>
             <input type="file" ref={lrcInputRef} onChange={handleLrcFile} accept=".lrc,.txt" className="hidden" />
+
+            <button 
+              onClick={onOpenTitleEditor}
+              className="w-full flex items-center gap-2 p-2 rounded bg-gray-800 hover:bg-gray-700 transition text-sm border border-gray-700"
+            >
+              <Heading size={16} className="text-orange-400" />
+              <span>Edit Title / Credits</span>
+            </button>
 
             <button 
               onClick={() => bgInputRef.current?.click()}
@@ -105,7 +133,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         {backgrounds.length > 0 && (
           <div className="space-y-3">
              <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Playlist</h2>
-             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                 {backgrounds.map((bg, idx) => (
                   <div key={bg.id} className="flex flex-col gap-2 p-2 bg-gray-800 rounded border border-gray-700 group">
                     <div className="flex items-center gap-2">
@@ -149,12 +177,11 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
           </div>
         )}
 
-        {/* Section: Settings */}
+        {/* Section: Output Settings */}
         <div className="space-y-4">
            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
              <Settings size={14} /> Output Settings
            </h2>
-           
            <div className="space-y-3">
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Resolution / Ratio</label>
@@ -177,74 +204,178 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
            </div>
         </div>
 
-        {/* Section: Lyric Style */}
-        <div className="space-y-4">
+        {/* Section: Style Controls */}
+        <div className="space-y-4 pb-12">
            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
-             <Type size={14} /> Lyric Style
+             <Type size={14} /> Style Editor
            </h2>
            
-           <div className="space-y-3">
+           {/* Style Mode Switcher */}
+           <div className="flex bg-gray-800 p-1 rounded-lg border border-gray-700">
+               <button 
+                  onClick={() => setStyleMode('lyric')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-xs rounded transition ${styleMode === 'lyric' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+               >
+                   <Layers size={12}/> Lyrics
+               </button>
+               <button 
+                  onClick={() => setStyleMode('title')}
+                  className={`flex-1 flex items-center justify-center gap-2 py-1.5 text-xs rounded transition ${styleMode === 'title' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'}`}
+               >
+                   <Heading size={12}/> Title/Credits
+               </button>
+           </div>
+
+           <div className="space-y-4 pt-2">
+              {/* Font */}
               <div>
                 <label className="text-xs text-gray-400 block mb-1">Font Family</label>
                 <input 
                   type="text"
-                  value={lyricStyle.fontFamily}
-                  onChange={(e) => setLyricStyle({...lyricStyle, fontFamily: e.target.value})}
-                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+                  value={currentStyle.fontFamily}
+                  onChange={(e) => setCurrentStyle({...currentStyle, fontFamily: e.target.value})}
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300"
                   placeholder="e.g. Arial, Impact"
                 />
-                <p className="text-[10px] text-gray-500 mt-1">Enter exact system font name</p>
+              </div>
+
+              {/* Animation Effect */}
+              <div>
+                <label className="text-xs text-gray-400 block mb-1 flex items-center gap-1">
+                   <Sparkles size={10} className="text-yellow-400" /> Animation Effect
+                </label>
+                <select 
+                    value={currentStyle.animationEffect}
+                    onChange={(e) => setCurrentStyle({...currentStyle, animationEffect: e.target.value as LyricEffect})}
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:border-blue-500 outline-none"
+                >
+                    <option value={LyricEffect.NONE}>None</option>
+                    <option value={LyricEffect.FADE_UP}>Fade Slide Up</option>
+                    <option value={LyricEffect.TYPEWRITER}>Typewriter</option>
+                    {styleMode === 'lyric' && <option value={LyricEffect.KARAOKE}>Karaoke Wipe</option>}
+                    <option value={LyricEffect.BREATHING}>Breathing Glow</option>
+                    <option value={LyricEffect.SCATTER}>Scatter Exit</option>
+                </select>
+              </div>
+
+              {/* Position & Size */}
+              <div className="grid grid-cols-2 gap-4">
+                 <div>
+                    <label className="text-xs text-gray-400 mb-1 flex items-center gap-1">
+                        <MoveVertical size={10} /> Pos Y ({Math.round(currentStyle.positionY * 100)}%)
+                    </label>
+                    <input 
+                      type="range" min="0.1" max="0.9" step="0.05"
+                      value={currentStyle.positionY} 
+                      onChange={(e) => setCurrentStyle({...currentStyle, positionY: Number(e.target.value)})}
+                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                    />
+                 </div>
+                 <div>
+                    <label className="text-xs text-gray-400 mb-1 flex items-center gap-1">
+                        <MoveHorizontal size={10} /> Pos X ({Math.round(currentStyle.positionX * 100)}%)
+                    </label>
+                    <input 
+                      type="range" min="0.1" max="0.9" step="0.05"
+                      value={currentStyle.positionX} 
+                      onChange={(e) => setCurrentStyle({...currentStyle, positionX: Number(e.target.value)})}
+                      className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                    />
+                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 block mb-1">Font Size ({lyricStyle.fontSize}px)</label>
+                <label className="text-xs text-gray-400 block mb-1">Base Font Size ({currentStyle.fontSize}px)</label>
                 <input 
                   type="range" min="20" max="150" 
-                  value={lyricStyle.fontSize} 
-                  onChange={(e) => setLyricStyle({...lyricStyle, fontSize: Number(e.target.value)})}
+                  value={currentStyle.fontSize} 
+                  onChange={(e) => setCurrentStyle({...currentStyle, fontSize: Number(e.target.value)})}
                   className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
               </div>
-
-              <div>
-                <label className="text-xs text-gray-400 block mb-1">Position Y ({Math.round(lyricStyle.positionY * 100)}%)</label>
-                <input 
-                  type="range" min="0.1" max="0.9" step="0.05"
-                  value={lyricStyle.positionY} 
-                  onChange={(e) => setLyricStyle({...lyricStyle, positionY: Number(e.target.value)})}
-                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-                />
+              
+              {/* Colors */}
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs text-gray-400 block mb-1">Primary Color</label>
+                  <input 
+                    type="color" 
+                    value={currentStyle.activeColor} 
+                    onChange={(e) => setCurrentStyle({...currentStyle, activeColor: e.target.value})}
+                    className="w-full h-8 bg-transparent cursor-pointer rounded border border-gray-700"
+                  />
+                </div>
+                {styleMode === 'lyric' && (
+                  <div>
+                    <label className="text-xs text-gray-400 block mb-1">Inactive Color</label>
+                    <input 
+                      type="color" 
+                      value={currentStyle.fontColor.slice(0, 7)} 
+                      onChange={(e) => setCurrentStyle({...currentStyle, fontColor: e.target.value})}
+                      className="w-full h-8 bg-transparent cursor-pointer rounded border border-gray-700"
+                    />
+                  </div>
+                )}
               </div>
 
+               {/* Shadow & Glow */}
+              <div className="p-3 bg-gray-800 rounded border border-gray-700 space-y-3">
+                 <h3 className="text-xs font-semibold text-gray-400 uppercase">Effects</h3>
+                 
+                 <div className="grid grid-cols-2 gap-2">
+                    <div>
+                        <label className="text-[10px] text-gray-400 block mb-1">Shadow Color</label>
+                        <input 
+                            type="color" 
+                            value={currentStyle.shadowColor} 
+                            onChange={(e) => setCurrentStyle({...currentStyle, shadowColor: e.target.value})}
+                            className="w-full h-6 bg-transparent cursor-pointer rounded"
+                        />
+                    </div>
+                     <div>
+                        <label className="text-[10px] text-gray-400 block mb-1">Shadow Blur</label>
+                        <input 
+                            type="number" 
+                            min="0" max="50"
+                            value={currentStyle.shadowBlur} 
+                            onChange={(e) => setCurrentStyle({...currentStyle, shadowBlur: Number(e.target.value)})}
+                            className="w-full bg-gray-900 border border-gray-700 rounded px-1 text-xs text-gray-300"
+                        />
+                    </div>
+                 </div>
+
+                 <div className="grid grid-cols-2 gap-2">
+                    <div>
+                        <label className="text-[10px] text-gray-400 block mb-1">Glow Color</label>
+                        <input 
+                            type="color" 
+                            value={currentStyle.glowColor} 
+                            onChange={(e) => setCurrentStyle({...currentStyle, glowColor: e.target.value})}
+                            className="w-full h-6 bg-transparent cursor-pointer rounded"
+                        />
+                    </div>
+                     <div>
+                        <label className="text-[10px] text-gray-400 block mb-1">Glow Blur</label>
+                        <input 
+                            type="number" 
+                            min="0" max="100"
+                            value={currentStyle.glowBlur} 
+                            onChange={(e) => setCurrentStyle({...currentStyle, glowBlur: Number(e.target.value)})}
+                            className="w-full bg-gray-900 border border-gray-700 rounded px-1 text-xs text-gray-300"
+                        />
+                    </div>
+                 </div>
+              </div>
+              
+              {/* Only show global overlay opacity in one place or shared? Let's keep it shared but editable in both */}
                <div>
                 <label className="text-xs text-gray-400 block mb-1">BG Overlay Opacity</label>
                 <input 
                   type="range" min="0" max="0.8" step="0.1"
-                  value={lyricStyle.bgOverlayOpacity} 
-                  onChange={(e) => setLyricStyle({...lyricStyle, bgOverlayOpacity: Number(e.target.value)})}
+                  value={currentStyle.bgOverlayOpacity} 
+                  onChange={(e) => setCurrentStyle({...currentStyle, bgOverlayOpacity: Number(e.target.value)})}
                   className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs text-gray-400 block mb-1">Text Color</label>
-                  <input 
-                    type="color" 
-                    value={lyricStyle.activeColor} 
-                    onChange={(e) => setLyricStyle({...lyricStyle, activeColor: e.target.value})}
-                    className="w-full h-8 bg-transparent cursor-pointer rounded"
-                  />
-                </div>
-                 <div>
-                  <label className="text-xs text-gray-400 block mb-1">Shadow</label>
-                  <input 
-                    type="color" 
-                    value={lyricStyle.shadowColor} 
-                    onChange={(e) => setLyricStyle({...lyricStyle, shadowColor: e.target.value})}
-                    className="w-full h-8 bg-transparent cursor-pointer rounded"
-                  />
-                </div>
               </div>
            </div>
         </div>
