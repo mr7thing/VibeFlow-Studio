@@ -14,9 +14,8 @@ export const parseLrc = (lrcContent: string): LrcLine[] => {
       const milliseconds = parseInt(match[3].padEnd(3, '0'), 10);
       const time = minutes * 60 + seconds + milliseconds / 1000;
       const text = line.replace(timeRegExp, '').trim();
-      if (text) {
-        result.push({ time, text });
-      }
+      // Allow empty text lines for spacing/timing
+      result.push({ time, text });
     }
   });
 
@@ -27,6 +26,17 @@ export const formatTime = (seconds: number): string => {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+export const formatLrcTime = (seconds: number): string => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  const ms = Math.floor((seconds % 1) * 100);
+  return `[${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}]`;
+};
+
+export const generateLrc = (lines: LrcLine[]): string => {
+  return lines.map(line => `${formatLrcTime(line.time)}${line.text}`).join('\n');
 };
 
 export const getResolution = (aspect: string, quality: '720p' | '1080p' = '1080p') => {

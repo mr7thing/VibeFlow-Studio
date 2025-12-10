@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type } from 'lucide-react';
+import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3 } from 'lucide-react';
 import { BackgroundMedia, MediaType, LyricStyle, AspectRatio } from '../types';
 
 interface ControlPanelProps {
@@ -14,6 +14,7 @@ interface ControlPanelProps {
   aspectRatio: AspectRatio;
   setAspectRatio: (ar: AspectRatio) => void;
   audioFileName?: string;
+  onOpenLyricEditor: () => void;
 }
 
 export const ControlPanel: React.FC<ControlPanelProps> = ({
@@ -28,6 +29,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   aspectRatio,
   setAspectRatio,
   audioFileName,
+  onOpenLyricEditor,
 }) => {
   const audioInputRef = useRef<HTMLInputElement>(null);
   const lrcInputRef = useRef<HTMLInputElement>(null);
@@ -42,7 +44,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   };
 
   return (
-    <div className="w-80 bg-gray-900 border-r border-gray-700 flex flex-col h-full overflow-hidden">
+    <div className="w-80 bg-gray-900 border-r border-gray-700 flex flex-col h-full overflow-hidden z-20">
       <div className="p-4 border-b border-gray-800">
         <h1 className="text-xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
           VibeFlow
@@ -67,13 +69,22 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
             </button>
             <input type="file" ref={audioInputRef} onChange={(e) => e.target.files?.[0] && onAudioUpload(e.target.files[0])} accept="audio/*" className="hidden" />
 
-            <button 
-              onClick={() => lrcInputRef.current?.click()}
-              className="w-full flex items-center gap-2 p-2 rounded bg-gray-800 hover:bg-gray-700 transition text-sm border border-gray-700"
-            >
-              <FileText size={16} className="text-green-400" />
-              <span>Upload LRC</span>
-            </button>
+            <div className="flex gap-2">
+                <button 
+                  onClick={() => lrcInputRef.current?.click()}
+                  className="flex-1 flex items-center justify-center gap-2 p-2 rounded bg-gray-800 hover:bg-gray-700 transition text-sm border border-gray-700"
+                >
+                  <FileText size={16} className="text-green-400" />
+                  <span>Import LRC</span>
+                </button>
+                <button 
+                  onClick={onOpenLyricEditor}
+                  className="w-10 flex items-center justify-center p-2 rounded bg-gray-800 hover:bg-gray-700 transition text-sm border border-gray-700"
+                  title="Create/Edit Lyrics"
+                >
+                  <Edit3 size={16} className="text-yellow-400" />
+                </button>
+            </div>
             <input type="file" ref={lrcInputRef} onChange={handleLrcFile} accept=".lrc,.txt" className="hidden" />
 
             <button 
@@ -164,9 +175,21 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
            
            <div className="space-y-3">
               <div>
+                <label className="text-xs text-gray-400 block mb-1">Font Family</label>
+                <input 
+                  type="text"
+                  value={lyricStyle.fontFamily}
+                  onChange={(e) => setLyricStyle({...lyricStyle, fontFamily: e.target.value})}
+                  className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-300"
+                  placeholder="e.g. Arial, Impact"
+                />
+                <p className="text-[10px] text-gray-500 mt-1">Enter exact system font name</p>
+              </div>
+
+              <div>
                 <label className="text-xs text-gray-400 block mb-1">Font Size ({lyricStyle.fontSize}px)</label>
                 <input 
-                  type="range" min="20" max="80" 
+                  type="range" min="20" max="150" 
                   value={lyricStyle.fontSize} 
                   onChange={(e) => setLyricStyle({...lyricStyle, fontSize: Number(e.target.value)})}
                   className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"

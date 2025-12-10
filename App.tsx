@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ControlPanel } from './components/ControlPanel';
-import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, CanvasConfig } from './types';
+import { LyricEditor } from './components/LyricEditor';
+import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio } from './types';
 import { parseLrc, formatTime, getResolution } from './utils';
 import { Play, Pause, Circle, Download, AlertCircle } from 'lucide-react';
 
 const DEFAULT_LYRIC_STYLE: LyricStyle = {
   fontSize: 40,
+  fontFamily: 'sans-serif',
   fontColor: '#ffffff80',
   activeColor: '#ffffff',
   shadowColor: '#000000',
@@ -27,6 +29,8 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
 
   // --- Refs ---
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -119,15 +123,6 @@ function App() {
     // Logic: Calculate cumulative time to find which background to show
     if (backgrounds.length > 0) {
       let accumulatedTime = 0;
-      // Calculate total loop duration
-      // Note: For videos, if duration is not set or 0, we might need to rely on their playback.
-      // Simplification: We cycle through the list. If audio is longer than background list, we loop the list.
-      // To loop the list based on audio time, we need the total duration of the user's "playlist".
-      
-      // However, video durations are async. 
-      // Strategy: Map 5s for images. For videos, use the video element's duration if ready, else default 10s.
-      // But we need a robust loop. 
-      // Simpler Visual Strategy: "Slideshow" mode.
       
       // Let's compute the total cycle duration dynamically
       let totalCycleDuration = 0;
@@ -154,24 +149,15 @@ function App() {
           if (currentBg.type === MediaType.IMAGE) {
             const img = new Image();
             img.src = currentBg.src;
-            // Note: In a real loop, caching images is better. But browser cache handles this well for blob urls.
             if (img.complete) {
                drawScaledMedia(ctx, img, canvas.width, canvas.height);
             } else {
-                // If not loaded yet, try to draw if already cached
-                // For simplicity in this React effect, we might see flicker on first load.
-                // Pre-loading images in `handleBackgroundUpload` is better practice.
-                // Here we rely on the browser having it from the sidebar preview.
                 drawScaledMedia(ctx, img, canvas.width, canvas.height); 
             }
           } else if (currentBg.type === MediaType.VIDEO) {
              const v = videoElementsRef.current.get(currentBg.src);
              if (v) {
-                 // Sync video time to the loop time within this segment
                  const videoLocalTime = loopTime - currentBg.start;
-                 // Only update video time if it's significantly off to avoid jitter, 
-                 // but for smooth rendering we usually just let it play if it's playing.
-                 // However, we want strict sync for recording.
                  if (Math.abs(v.currentTime - videoLocalTime) > 0.3) {
                      v.currentTime = videoLocalTime;
                  }
@@ -210,7 +196,7 @@ function App() {
       if (activeIndex !== -1) {
           const activeLine = lrcLines[activeIndex];
           
-          ctx.font = `bold ${lyricStyle.fontSize}px sans-serif`;
+          ctx.font = `bold ${lyricStyle.fontSize}px "${lyricStyle.fontFamily}", sans-serif`;
           ctx.shadowColor = lyricStyle.shadowColor;
           ctx.shadowBlur = lyricStyle.shadowBlur;
           ctx.fillStyle = lyricStyle.activeColor;
@@ -219,10 +205,10 @@ function App() {
           // Reset shadow for others
           ctx.shadowBlur = 0;
 
-          // Draw next line (preview) - Optional, minimal visibility
+          // Draw next line (preview)
           if (activeIndex + 1 < lrcLines.length) {
               const nextLine = lrcLines[activeIndex + 1];
-              ctx.font = `${lyricStyle.fontSize * 0.7}px sans-serif`;
+              ctx.font = `${lyricStyle.fontSize * 0.7}px "${lyricStyle.fontFamily}", sans-serif`;
               ctx.fillStyle = lyricStyle.fontColor;
               ctx.fillText(nextLine.text, x, baseY + lyricStyle.fontSize * 1.5);
           }
@@ -230,15 +216,15 @@ function App() {
            // Draw prev line
           if (activeIndex - 1 >= 0) {
               const prevLine = lrcLines[activeIndex - 1];
-              ctx.font = `${lyricStyle.fontSize * 0.7}px sans-serif`;
+              ctx.font = `${lyricStyle.fontSize * 0.7}px "${lyricStyle.fontFamily}", sans-serif`;
               ctx.fillStyle = lyricStyle.fontColor;
               ctx.fillText(prevLine.text, x, baseY - lyricStyle.fontSize * 1.5);
           }
 
       } else {
-        // No active line found (maybe intro), show first line prepared or nothing
+        // No active line found (maybe intro)
         if (lrcLines.length > 0 && currentTime < lrcLines[0].time) {
-             ctx.font = `${lyricStyle.fontSize * 0.8}px sans-serif`;
+             ctx.font = `${lyricStyle.fontSize * 0.8}px "${lyricStyle.fontFamily}", sans-serif`;
              ctx.fillStyle = lyricStyle.fontColor;
              ctx.fillText(lrcLines[0].text, x, baseY + lyricStyle.fontSize * 1.5);
              ctx.fillText("...", x, baseY);
@@ -304,8 +290,6 @@ function App() {
         videoElementsRef.current.forEach(v => v.pause());
       } else {
         audioRef.current.play();
-        // Background videos logic is handled in drawCanvas loop for syncing, 
-        // but we trigger them here to ensure 'user interaction' policy is met if needed.
       }
       setIsPlaying(!isPlaying);
     }
@@ -316,7 +300,6 @@ function App() {
     if (audioRef.current) {
       audioRef.current.currentTime = time;
       setCurrentTime(time);
-      // Also seek background videos implicitly via the draw loop logic next frame
     }
   };
 
@@ -331,10 +314,6 @@ function App() {
 
      // Capture streams
      const canvasStream = canvasRef.current.captureStream(30); // 30 FPS
-     // Audio stream (Cross-origin issues might arise if audio is from external URL, but here it's Blob)
-     // For a local file blob, captureStream on audio element works in Chrome/Firefox.
-     // In some browsers, we might need Web Audio API to connect audioSource -> dest -> stream
-     
      let combinedStream = canvasStream;
      
      // Try to get audio track
@@ -404,6 +383,14 @@ function App() {
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
       />
 
+      <LyricEditor 
+        isOpen={isEditorOpen}
+        onClose={() => setIsEditorOpen(false)}
+        onSave={(lines) => setLrcLines(lines)}
+        initialLines={lrcLines}
+        audioRef={audioRef}
+      />
+
       <ControlPanel 
         onAudioUpload={handleAudioUpload}
         onLrcUpload={handleLrcUpload}
@@ -416,6 +403,15 @@ function App() {
         aspectRatio={aspectRatio}
         setAspectRatio={setAspectRatio}
         audioFileName={audioFile?.name}
+        onOpenLyricEditor={() => {
+             if (!audioSrc) {
+                 alert("Please upload audio first.");
+                 return;
+             }
+             setIsPlaying(false);
+             audioRef.current?.pause();
+             setIsEditorOpen(true);
+        }}
       />
 
       <div className="flex-1 flex flex-col min-w-0">

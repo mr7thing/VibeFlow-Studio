@@ -24,6 +24,7 @@ export interface CanvasConfig {
 
 export interface LyricStyle {
   fontSize: number;
+  fontFamily: string;
   fontColor: string;
   activeColor: string;
   shadowColor: string;
