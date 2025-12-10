@@ -1,3 +1,4 @@
+
 export interface LrcLine {
   time: number; // in seconds
   text: string;
@@ -13,7 +14,7 @@ export interface BackgroundMedia {
   type: MediaType;
   src: string; // Blob URL
   file: File;
-  duration: number; // For images (seconds), for videos (auto-detected)
+  duration: number; // For images (seconds), for videos (0 = auto/original length)
 }
 
 export interface CanvasConfig {

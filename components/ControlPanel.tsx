@@ -1,5 +1,6 @@
+
 import React, { useRef } from 'react';
-import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3 } from 'lucide-react';
+import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy } from 'lucide-react';
 import { BackgroundMedia, MediaType, LyricStyle, AspectRatio } from '../types';
 
 interface ControlPanelProps {
@@ -8,6 +9,7 @@ interface ControlPanelProps {
   onBackgroundUpload: (files: FileList) => void;
   backgrounds: BackgroundMedia[];
   onRemoveBackground: (id: string) => void;
+  onDuplicateBackground: (id: string) => void;
   onUpdateBackgroundDuration: (id: string, duration: number) => void;
   lyricStyle: LyricStyle;
   setLyricStyle: (style: LyricStyle) => void;
@@ -23,6 +25,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onBackgroundUpload,
   backgrounds,
   onRemoveBackground,
+  onDuplicateBackground,
   onUpdateBackgroundDuration,
   lyricStyle,
   setLyricStyle,
@@ -102,37 +105,44 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
         {backgrounds.length > 0 && (
           <div className="space-y-3">
              <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Playlist</h2>
-             <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                 {backgrounds.map((bg, idx) => (
-                  <div key={bg.id} className="flex items-center gap-2 p-2 bg-gray-800 rounded border border-gray-700 group">
-                    <div className="w-10 h-10 bg-black rounded overflow-hidden flex-shrink-0">
-                      {bg.type === MediaType.VIDEO ? (
-                        <video src={bg.src} className="w-full h-full object-cover" />
-                      ) : (
-                        <img src={bg.src} className="w-full h-full object-cover" alt="" />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs truncate text-gray-300">{bg.file.name}</p>
-                      {bg.type === MediaType.IMAGE && (
-                        <div className="flex items-center gap-1 mt-1">
-                           <span className="text-[10px] text-gray-500">Dur:</span>
-                           <input 
-                              type="number" 
-                              value={bg.duration}
-                              onChange={(e) => onUpdateBackgroundDuration(bg.id, Number(e.target.value))}
-                              className="w-12 bg-gray-900 text-xs border border-gray-700 rounded px-1"
-                           />
-                           <span className="text-[10px] text-gray-500">s</span>
+                  <div key={bg.id} className="flex flex-col gap-2 p-2 bg-gray-800 rounded border border-gray-700 group">
+                    <div className="flex items-center gap-2">
+                        <div className="w-10 h-10 bg-black rounded overflow-hidden flex-shrink-0 relative">
+                        {bg.type === MediaType.VIDEO ? (
+                            <video src={bg.src} className="w-full h-full object-cover" />
+                        ) : (
+                            <img src={bg.src} className="w-full h-full object-cover" alt="" />
+                        )}
                         </div>
-                      )}
-                      {bg.type === MediaType.VIDEO && (
-                        <span className="text-[10px] text-gray-500">Auto duration</span>
-                      )}
+                        <div className="flex-1 min-w-0">
+                            <p className="text-xs truncate text-gray-300 mb-1">{bg.file.name}</p>
+                            <div className="flex items-center gap-1">
+                                <span className="text-[10px] text-gray-500">Dur:</span>
+                                <input 
+                                    type="number" 
+                                    value={bg.duration}
+                                    onChange={(e) => onUpdateBackgroundDuration(bg.id, Number(e.target.value))}
+                                    className="w-12 bg-gray-900 text-xs border border-gray-700 rounded px-1 text-gray-300"
+                                    min="0"
+                                    title={bg.type === MediaType.VIDEO ? "0 = Auto (Video Length)" : "Duration in seconds"}
+                                />
+                                <span className="text-[10px] text-gray-500">s</span>
+                                {bg.type === MediaType.VIDEO && bg.duration === 0 && (
+                                    <span className="text-[9px] px-1 bg-gray-700 rounded text-gray-400">Auto</span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                             <button onClick={() => onDuplicateBackground(bg.id)} className="text-gray-500 hover:text-blue-400" title="Duplicate">
+                                <Copy size={14} />
+                            </button>
+                            <button onClick={() => onRemoveBackground(bg.id)} className="text-gray-500 hover:text-red-400" title="Remove">
+                                <Trash2 size={14} />
+                            </button>
+                        </div>
                     </div>
-                    <button onClick={() => onRemoveBackground(bg.id)} className="text-gray-500 hover:text-red-400">
-                      <Trash2 size={14} />
-                    </button>
                   </div>
                 ))}
              </div>

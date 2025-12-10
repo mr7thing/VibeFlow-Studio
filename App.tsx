@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { LyricEditor } from './components/LyricEditor';
@@ -68,13 +69,14 @@ function App() {
       
       // If video, create a hidden video element to read metadata and for playback drawing
       if (type === MediaType.VIDEO) {
-        const v = document.createElement('video');
-        v.src = url;
-        v.muted = true;
-        v.loop = true; // Videos loop by default internally unless managed otherwise
-        v.playsInline = true;
-        v.load(); // Trigger load
-        videoElementsRef.current.set(url, v);
+        if (!videoElementsRef.current.has(url)) {
+            const v = document.createElement('video');
+            v.src = url;
+            v.muted = true;
+            v.playsInline = true;
+            v.load(); 
+            videoElementsRef.current.set(url, v);
+        }
       }
 
       return {
@@ -82,7 +84,7 @@ function App() {
         type,
         src: url,
         file,
-        duration: 5, // Default 5s for images
+        duration: type === MediaType.IMAGE ? 5 : 0, // Default 5s for images, 0 (auto) for videos
       };
     });
     setBackgrounds((prev) => [...prev, ...newBackgrounds]);
@@ -90,18 +92,41 @@ function App() {
 
   const removeBackground = (id: string) => {
     setBackgrounds(prev => {
-        const bg = prev.find(b => b.id === id);
-        if (bg && bg.type === MediaType.VIDEO) {
-            // Cleanup video element
-             const v = videoElementsRef.current.get(bg.src);
-             if(v) {
-                 v.pause();
-                 v.src = '';
-                 videoElementsRef.current.delete(bg.src);
+        const bgToRemove = prev.find(b => b.id === id);
+        
+        // Only clean up video ref if no other background uses the same src (duplicates)
+        if (bgToRemove && bgToRemove.type === MediaType.VIDEO) {
+             const othersUsingSrc = prev.filter(b => b.id !== id && b.src === bgToRemove.src).length > 0;
+             if (!othersUsingSrc) {
+                 const v = videoElementsRef.current.get(bgToRemove.src);
+                 if(v) {
+                     v.pause();
+                     v.src = '';
+                     videoElementsRef.current.delete(bgToRemove.src);
+                 }
              }
         }
         return prev.filter(b => b.id !== id);
     });
+  };
+
+  const duplicateBackground = (id: string) => {
+      setBackgrounds(prev => {
+          const original = prev.find(b => b.id === id);
+          if (!original) return prev;
+          
+          const copy: BackgroundMedia = {
+              ...original,
+              id: Math.random().toString(36).substr(2, 9), // New ID
+              // Src and file ref remain the same, which is fine as they point to the same blob
+          };
+          
+          // Insert after the original
+          const index = prev.indexOf(original);
+          const newArr = [...prev];
+          newArr.splice(index + 1, 0, copy);
+          return newArr;
+      });
   };
 
   const updateBackgroundDuration = (id: string, dur: number) => {
@@ -122,23 +147,28 @@ function App() {
     // 2. Draw Active Background
     // Logic: Calculate cumulative time to find which background to show
     if (backgrounds.length > 0) {
-      let accumulatedTime = 0;
-      
-      // Let's compute the total cycle duration dynamically
       let totalCycleDuration = 0;
+      
+      // Pre-calculate timeline
       const playlist = backgrounds.map(bg => {
          let duration = bg.duration;
+         
+         // If video and duration is 0, try to use natural duration
          if (bg.type === MediaType.VIDEO) {
              const v = videoElementsRef.current.get(bg.src);
-             if (v && v.duration && !isNaN(v.duration)) {
-                 duration = v.duration;
-             } else {
-                 duration = 10; // Fallback
+             // Use natural duration only if user hasn't set a manual duration (0)
+             if (duration === 0) {
+                 if (v && v.duration && !isNaN(v.duration) && v.duration !== Infinity) {
+                     duration = v.duration;
+                 } else {
+                     duration = 10; // Fallback while loading
+                 }
              }
          }
+         
          const start = totalCycleDuration;
          totalCycleDuration += duration;
-         return { ...bg, start, end: totalCycleDuration, duration };
+         return { ...bg, start, end: totalCycleDuration, effectiveDuration: duration };
       });
 
       if (totalCycleDuration > 0) {
@@ -149,18 +179,23 @@ function App() {
           if (currentBg.type === MediaType.IMAGE) {
             const img = new Image();
             img.src = currentBg.src;
-            if (img.complete) {
-               drawScaledMedia(ctx, img, canvas.width, canvas.height);
-            } else {
-                drawScaledMedia(ctx, img, canvas.width, canvas.height); 
-            }
+            drawScaledMedia(ctx, img, canvas.width, canvas.height);
           } else if (currentBg.type === MediaType.VIDEO) {
              const v = videoElementsRef.current.get(currentBg.src);
              if (v) {
-                 const videoLocalTime = loopTime - currentBg.start;
-                 if (Math.abs(v.currentTime - videoLocalTime) > 0.3) {
-                     v.currentTime = videoLocalTime;
+                 // Calculate local time within this clip [0, effectiveDuration]
+                 let localTime = loopTime - currentBg.start;
+                 
+                 // Standard Loop Logic
+                 const sourceDuration = (v.duration && v.duration !== Infinity) ? v.duration : 1;
+                 const videoPointer = localTime % sourceDuration;
+
+                 // Sync video element
+                 if (Math.abs(v.currentTime - videoPointer) > 0.3) {
+                     v.currentTime = videoPointer;
                  }
+                 
+                 // Manage play state
                  if (isPlaying && v.paused) v.play().catch(() => {});
                  if (!isPlaying && !v.paused) v.pause();
                  
@@ -397,6 +432,7 @@ function App() {
         onBackgroundUpload={handleBackgroundUpload}
         backgrounds={backgrounds}
         onRemoveBackground={removeBackground}
+        onDuplicateBackground={duplicateBackground}
         onUpdateBackgroundDuration={updateBackgroundDuration}
         lyricStyle={lyricStyle}
         setLyricStyle={setLyricStyle}
