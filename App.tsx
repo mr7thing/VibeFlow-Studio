@@ -342,9 +342,8 @@ function App() {
   const startRecording = () => {
      if (!canvasRef.current || !audioRef.current) return;
      
-     // Rewind to start for clean recording (optional, but good UX)
-     audioRef.current.currentTime = 0;
-     setCurrentTime(0);
+     // Removed rewind to start to allow recording from current time
+     
      if (!isPlaying) togglePlay();
 
      // Capture streams
@@ -400,7 +399,8 @@ function App() {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
           mediaRecorderRef.current.stop();
           setIsRecording(false);
-          if (isPlaying) togglePlay();
+          // Pause playback when recording stops (UX choice: keeps user at end of segment)
+          if (isPlaying) togglePlay(); 
       }
   };
 
@@ -467,6 +467,7 @@ function App() {
                         onClick={startRecording} 
                         disabled={!audioSrc}
                         className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 disabled:opacity-50 rounded text-sm font-medium border border-gray-700"
+                        title="Start recording from current position"
                     >
                         <Circle size={14} className="fill-red-500 text-red-500" /> Record & Export
                     </button>
