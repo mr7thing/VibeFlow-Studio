@@ -71,3 +71,35 @@ export enum AspectRatio {
   PORTRAIT_9_16 = '9:16',
   SQUARE_1_1 = '1:1',
 }
+
+// --- Persistence Types ---
+
+export interface SavedProjectSummary {
+  id: string;
+  name: string;
+  updatedAt: number;
+  thumbnail?: string; // Base64 placeholder for future
+}
+
+// The complete serialized state
+export interface SavedProjectData {
+  id: string;
+  name: string;
+  updatedAt: number;
+  // Configs
+  lyricStyle: LyricStyle;
+  titleStyle: LyricStyle;
+  titleConfig: TitleConfig;
+  aspectRatio: AspectRatio;
+  lrcLines: LrcLine[];
+  // Assets Metadata
+  audioFileName?: string;
+  // We don't store Blobs in this object directly for structure, but they are stored in the 'assets' store
+  // and referenced here.
+  backgrounds: {
+    id: string;
+    type: MediaType;
+    duration: number;
+    fileName: string;
+  }[];
+}

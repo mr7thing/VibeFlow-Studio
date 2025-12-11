@@ -3,8 +3,10 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { ControlPanel } from './components/ControlPanel';
 import { LyricEditor } from './components/LyricEditor';
 import { TitleEditor } from './components/TitleEditor';
-import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, LyricEffect, TitleConfig, TitleLayoutMode } from './types';
+import { ProjectManager } from './components/ProjectManager';
+import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, LyricEffect, TitleConfig, TitleLayoutMode, SavedProjectData } from './types';
 import { parseLrc, formatTime, getResolution } from './utils';
+import { saveProjectToDB, loadProjectFromDB } from './utils/db';
 import { Play, Pause, Circle, Download, AlertCircle } from 'lucide-react';
 
 const DEFAULT_LYRIC_STYLE: LyricStyle = {
@@ -69,6 +71,7 @@ function App() {
 
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isTitleEditorOpen, setIsTitleEditorOpen] = useState(false);
+  const [isProjectManagerOpen, setIsProjectManagerOpen] = useState(false);
 
   // --- Refs ---
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -84,6 +87,7 @@ function App() {
 
   // Handle Audio Upload
   const handleAudioUpload = (file: File) => {
+    if (audioSrc) URL.revokeObjectURL(audioSrc);
     const url = URL.createObjectURL(file);
     setAudioSrc(url);
     setAudioFile(file);
@@ -158,16 +162,144 @@ function App() {
               // Src and file ref remain the same, which is fine as they point to the same blob
           };
           
-          // Insert after the original
-          const index = prev.indexOf(original);
+          // Append to end instead of inserting after
+          return [...prev, copy];
+      });
+  };
+
+  const moveBackground = (id: string, direction: 'up' | 'down') => {
+      setBackgrounds(prev => {
+          const index = prev.findIndex(b => b.id === id);
+          if (index === -1) return prev;
+
+          // Check bounds
+          if (direction === 'up' && index === 0) return prev;
+          if (direction === 'down' && index === prev.length - 1) return prev;
+
           const newArr = [...prev];
-          newArr.splice(index + 1, 0, copy);
+          const swapIndex = direction === 'up' ? index - 1 : index + 1;
+          
+          // Swap
+          [newArr[index], newArr[swapIndex]] = [newArr[swapIndex], newArr[index]];
+          
           return newArr;
       });
   };
 
   const updateBackgroundDuration = (id: string, dur: number) => {
     setBackgrounds(prev => prev.map(b => b.id === id ? { ...b, duration: dur } : b));
+  };
+
+  // --- Project Persistence ---
+  
+  const handleSaveProject = async (name: string) => {
+      const projectId = Date.now().toString(); // Simple ID
+      
+      const projectData: SavedProjectData = {
+          id: projectId,
+          name,
+          updatedAt: Date.now(),
+          lyricStyle,
+          titleStyle,
+          titleConfig,
+          aspectRatio,
+          lrcLines,
+          audioFileName: audioFile?.name,
+          backgrounds: backgrounds.map(bg => ({
+              id: bg.id,
+              type: bg.type,
+              duration: bg.duration,
+              fileName: bg.file.name
+          }))
+      };
+
+      // Prepare Blobs
+      const bgBlobs = backgrounds.map(bg => ({
+          id: bg.id,
+          blob: bg.file
+      }));
+
+      await saveProjectToDB(projectData, audioFile, bgBlobs);
+  };
+
+  const handleLoadProject = async (id: string) => {
+      // 1. Clear current state
+      setIsPlaying(false);
+      if (audioRef.current) audioRef.current.pause();
+      if(audioSrc) URL.revokeObjectURL(audioSrc);
+      backgrounds.forEach(bg => URL.revokeObjectURL(bg.src));
+      
+      const { data, audioBlob, backgroundBlobs } = await loadProjectFromDB(id);
+
+      // 2. Restore Settings
+      setLyricStyle(data.lyricStyle);
+      setTitleStyle(data.titleStyle);
+      setTitleConfig(data.titleConfig);
+      setAspectRatio(data.aspectRatio);
+      setLrcLines(data.lrcLines);
+
+      // 3. Restore Audio
+      if (audioBlob) {
+          const url = URL.createObjectURL(audioBlob);
+          setAudioSrc(url);
+          setAudioFile(new File([audioBlob], data.audioFileName || 'audio.mp3', { type: audioBlob.type }));
+      } else {
+          setAudioSrc(null);
+          setAudioFile(null);
+      }
+
+      // 4. Restore Backgrounds
+      const restoredBackgrounds: BackgroundMedia[] = [];
+      data.backgrounds.forEach(bgMeta => {
+          const blob = backgroundBlobs.get(bgMeta.id);
+          if (blob) {
+              const url = URL.createObjectURL(blob);
+              const file = new File([blob], bgMeta.fileName, { type: blob.type });
+              
+              if (bgMeta.type === MediaType.VIDEO) {
+                 if (!videoElementsRef.current.has(url)) {
+                    const v = document.createElement('video');
+                    v.src = url;
+                    v.muted = true;
+                    v.playsInline = true;
+                    v.load(); 
+                    videoElementsRef.current.set(url, v);
+                }
+              }
+
+              restoredBackgrounds.push({
+                  id: bgMeta.id,
+                  type: bgMeta.type,
+                  src: url,
+                  file,
+                  duration: bgMeta.duration
+              });
+          }
+      });
+      setBackgrounds(restoredBackgrounds);
+  };
+
+  const handleExportConfig = () => {
+      const config = {
+          lyricStyle,
+          titleStyle,
+          titleConfig,
+          lrcLines,
+          aspectRatio,
+          // We can export placeholder info for assets
+          _meta: {
+              audioName: audioFile?.name,
+              backgroundCount: backgrounds.length,
+              exportedAt: new Date().toISOString()
+          }
+      };
+      
+      const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `vibeflow_config_${Date.now()}.json`;
+      a.click();
   };
 
   // --- Canvas Logic ---
@@ -414,8 +546,6 @@ function App() {
                      xOffset += titleStyle.fontSize * elements[i].fontSizeMult * 1.5;
                  }
                  x = startX - xOffset - (titleStyle.fontSize * el.fontSizeMult / 2);
-                 y = cy - (currentFontSize * el.text.length / 2); // Start Y roughly centered vertically? No, vertical text logic draws down.
-                 // Actually vertical drawing needs top anchor usually to center block
                  y = cy - (currentFontSize * el.text.length * 1.1 / 2);
 
              } else if (titleConfig.layoutMode === TitleLayoutMode.CINEMATIC) {
@@ -744,6 +874,14 @@ function App() {
         onSave={setTitleConfig}
       />
 
+      <ProjectManager 
+        isOpen={isProjectManagerOpen}
+        onClose={() => setIsProjectManagerOpen(false)}
+        onSaveCurrent={handleSaveProject}
+        onLoadProject={handleLoadProject}
+        onExportConfig={handleExportConfig}
+      />
+
       <ControlPanel 
         onAudioUpload={handleAudioUpload}
         onLrcUpload={handleLrcUpload}
@@ -751,6 +889,7 @@ function App() {
         backgrounds={backgrounds}
         onRemoveBackground={removeBackground}
         onDuplicateBackground={duplicateBackground}
+        onMoveBackground={moveBackground}
         onUpdateBackgroundDuration={updateBackgroundDuration}
         
         lyricStyle={lyricStyle}
@@ -772,6 +911,7 @@ function App() {
              setIsEditorOpen(true);
         }}
         onOpenTitleEditor={() => setIsTitleEditorOpen(true)}
+        onOpenProjectManager={() => setIsProjectManagerOpen(true)}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
