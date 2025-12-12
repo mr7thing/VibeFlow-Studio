@@ -32,6 +32,14 @@ export enum LyricEffect {
   SCATTER = 'scatter',
 }
 
+export enum TransitionEffect {
+  NONE = 'none',
+  CROSSFADE = 'crossfade',
+  FLASH_BLACK = 'flash_black',
+  ZOOM_OUT = 'zoom_out',
+  SHAKE = 'shake',
+}
+
 export interface LyricStyle {
   fontSize: number;
   fontFamily: string;
@@ -91,6 +99,10 @@ export interface SavedProjectData {
   titleStyle: LyricStyle;
   titleConfig: TitleConfig;
   aspectRatio: AspectRatio;
+  // New Global Configs
+  transitionEffect: TransitionEffect;
+  transitionDuration: number;
+
   lrcLines: LrcLine[];
   // Assets Metadata
   audioFileName?: string;

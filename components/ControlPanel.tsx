@@ -1,7 +1,7 @@
 
 import React, { useRef, useState } from 'react';
-import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy, Sparkles, MoveHorizontal, MoveVertical, Heading, Layers, ChevronUp, ChevronDown, FolderHeart } from 'lucide-react';
-import { BackgroundMedia, MediaType, LyricStyle, AspectRatio, LyricEffect } from '../types';
+import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy, Sparkles, MoveHorizontal, MoveVertical, Heading, Layers, ChevronUp, ChevronDown, FolderHeart, Zap } from 'lucide-react';
+import { BackgroundMedia, MediaType, LyricStyle, AspectRatio, LyricEffect, TransitionEffect } from '../types';
 
 interface ControlPanelProps {
   onAudioUpload: (file: File) => void;
@@ -21,8 +21,14 @@ interface ControlPanelProps {
   titleStyle: LyricStyle;
   setTitleStyle: (style: LyricStyle) => void;
 
+  // Global Settings
   aspectRatio: AspectRatio;
   setAspectRatio: (ar: AspectRatio) => void;
+  transitionEffect: TransitionEffect;
+  setTransitionEffect: (effect: TransitionEffect) => void;
+  transitionDuration: number;
+  setTransitionDuration: (duration: number) => void;
+
   audioFileName?: string;
   onOpenLyricEditor: () => void;
   onOpenTitleEditor: () => void;
@@ -44,6 +50,10 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   setTitleStyle,
   aspectRatio,
   setAspectRatio,
+  transitionEffect,
+  setTransitionEffect,
+  transitionDuration,
+  setTransitionDuration,
   audioFileName,
   onOpenLyricEditor,
   onOpenTitleEditor,
@@ -235,6 +245,35 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                   ))}
                 </div>
               </div>
+
+              {/* Transitions */}
+               <div>
+                <label className="text-xs text-gray-400 block mb-1 flex items-center gap-1">
+                    <Zap size={10} className="text-yellow-400"/> Transition Effect
+                </label>
+                <div className="flex gap-2">
+                    <select 
+                        value={transitionEffect}
+                        onChange={(e) => setTransitionEffect(e.target.value as TransitionEffect)}
+                        className="flex-1 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:border-blue-500 outline-none"
+                    >
+                        <option value={TransitionEffect.NONE}>None (Cut)</option>
+                        <option value={TransitionEffect.CROSSFADE}>Crossfade</option>
+                        <option value={TransitionEffect.FLASH_BLACK}>Flash Black</option>
+                        <option value={TransitionEffect.ZOOM_OUT}>Zoom Fade</option>
+                        <option value={TransitionEffect.SHAKE}>Glitch Shake</option>
+                    </select>
+                    
+                    <input 
+                        type="number" 
+                        min="0.5" max="3" step="0.5"
+                        value={transitionDuration}
+                        onChange={(e) => setTransitionDuration(Number(e.target.value))}
+                        className="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-1.5 text-xs text-center text-gray-300"
+                        title="Transition Duration (seconds)"
+                    />
+                </div>
+              </div>
            </div>
         </div>
 
@@ -401,7 +440,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                  </div>
               </div>
               
-              {/* Only show global overlay opacity in one place or shared? Let's keep it shared but editable in both */}
                <div>
                 <label className="text-xs text-gray-400 block mb-1">BG Overlay Opacity</label>
                 <input 

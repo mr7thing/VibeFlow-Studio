@@ -4,7 +4,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { LyricEditor } from './components/LyricEditor';
 import { TitleEditor } from './components/TitleEditor';
 import { ProjectManager } from './components/ProjectManager';
-import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, LyricEffect, TitleConfig, TitleLayoutMode, SavedProjectData } from './types';
+import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, LyricEffect, TitleConfig, TitleLayoutMode, SavedProjectData, TransitionEffect } from './types';
 import { parseLrc, formatTime, getResolution } from './utils';
 import { saveProjectToDB, loadProjectFromDB } from './utils/db';
 import { Play, Pause, Circle, Download, AlertCircle } from 'lucide-react';
@@ -64,6 +64,10 @@ function App() {
 
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.LANDSCAPE_16_9);
   
+  // Transition Settings
+  const [transitionEffect, setTransitionEffect] = useState<TransitionEffect>(TransitionEffect.CROSSFADE);
+  const [transitionDuration, setTransitionDuration] = useState<number>(1.5);
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -203,6 +207,8 @@ function App() {
           titleStyle,
           titleConfig,
           aspectRatio,
+          transitionEffect,
+          transitionDuration,
           lrcLines,
           audioFileName: audioFile?.name,
           backgrounds: backgrounds.map(bg => ({
@@ -237,6 +243,10 @@ function App() {
       setTitleConfig(data.titleConfig);
       setAspectRatio(data.aspectRatio);
       setLrcLines(data.lrcLines);
+      
+      // Support legacy projects
+      if(data.transitionEffect) setTransitionEffect(data.transitionEffect);
+      if(data.transitionDuration) setTransitionDuration(data.transitionDuration);
 
       // 3. Restore Audio
       if (audioBlob) {
@@ -286,7 +296,8 @@ function App() {
           titleConfig,
           lrcLines,
           aspectRatio,
-          // We can export placeholder info for assets
+          transitionEffect,
+          transitionDuration,
           _meta: {
               audioName: audioFile?.name,
               backgroundCount: backgrounds.length,
@@ -304,23 +315,49 @@ function App() {
 
   // --- Canvas Logic ---
 
+  const drawScaledMedia = useCallback((ctx: CanvasRenderingContext2D, media: HTMLImageElement | HTMLVideoElement, cw: number, ch: number, scaleFactor: number = 1, opacity: number = 1) => {
+     let mw = 0, mh = 0;
+     if (media instanceof HTMLVideoElement) {
+         if (media.videoWidth === 0) return;
+         mw = media.videoWidth;
+         mh = media.videoHeight;
+     } else {
+         if (media.naturalWidth === 0) return; // Not loaded
+         mw = media.naturalWidth;
+         mh = media.naturalHeight;
+     }
+
+     ctx.globalAlpha = opacity;
+     
+     // Calculate 'cover' fit
+     const ratio = Math.max(cw / mw, ch / mh) * scaleFactor;
+     const dw = mw * ratio;
+     const dh = mh * ratio;
+     const x = (cw - dw) / 2;
+     const y = (ch - dh) / 2;
+
+     ctx.drawImage(media, x, y, dw, dh);
+     ctx.globalAlpha = 1.0; // Reset
+  }, []);
+
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
 
-    // 1. Clear & Background Fill
+    // 1. Clear
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // 2. Draw Active Background
+    // 2. Determine Backgrounds & Transitions
     if (backgrounds.length > 0) {
+      // Build playlist timeline
       let totalCycleDuration = 0;
-      
       const playlist = backgrounds.map(bg => {
          let duration = bg.duration;
          if (bg.type === MediaType.VIDEO) {
              const v = videoElementsRef.current.get(bg.src);
+             // Default auto duration if 0
              if (duration === 0) {
                  if (v && v.duration && !isNaN(v.duration) && v.duration !== Infinity) {
                      duration = v.duration;
@@ -336,29 +373,120 @@ function App() {
 
       if (totalCycleDuration > 0) {
         const loopTime = currentTime % totalCycleDuration;
-        const currentBg = playlist.find(item => loopTime >= item.start && loopTime < item.end) || playlist[0];
+        const currentIndex = playlist.findIndex(item => loopTime >= item.start && loopTime < item.end);
+        
+        if (currentIndex !== -1) {
+          const currentItem = playlist[currentIndex];
+          const timeRemaining = currentItem.end - loopTime;
+          
+          // Should we transition?
+          const inTransition = timeRemaining <= transitionDuration && backgrounds.length > 1;
+          
+          // Prepare Draw Function
+          const renderItem = (item: typeof playlist[0], alpha: number = 1, scale: number = 1, shake: boolean = false) => {
+               ctx.save();
+               if (shake) {
+                   const shakeAmount = 20 * alpha; // Shake intensity
+                   const dx = (Math.random() - 0.5) * shakeAmount;
+                   const dy = (Math.random() - 0.5) * shakeAmount;
+                   ctx.translate(dx, dy);
+               }
 
-        if (currentBg) {
-          if (currentBg.type === MediaType.IMAGE) {
-            const img = new Image();
-            img.src = currentBg.src;
-            drawScaledMedia(ctx, img, canvas.width, canvas.height);
-          } else if (currentBg.type === MediaType.VIDEO) {
-             const v = videoElementsRef.current.get(currentBg.src);
-             if (v) {
-                 let localTime = loopTime - currentBg.start;
-                 const sourceDuration = (v.duration && v.duration !== Infinity) ? v.duration : 1;
-                 const videoPointer = localTime % sourceDuration;
+               if (item.type === MediaType.IMAGE) {
+                    const img = new Image();
+                    img.src = item.src;
+                    drawScaledMedia(ctx, img, canvas.width, canvas.height, scale, alpha);
+               } else if (item.type === MediaType.VIDEO) {
+                    const v = videoElementsRef.current.get(item.src);
+                    if (v) {
+                         // Sync video time relative to item start
+                         // This is tricky for looping playlist.
+                         // Calculate time relative to the START of this item's slot in the loop
+                         // We need to handle the case where we are 'transitioning to' this video
+                         // or 'transitioning from' this video.
+                         
+                         // Current Logic: Sync based on loopTime.
+                         // For next item (during transition), loopTime would technically be 'future'.
+                         // But we want it to start from 0.
+                         
+                         let videoTime = 0;
+                         if (item === currentItem) {
+                             videoTime = loopTime - item.start;
+                         } else {
+                             // It's the next item
+                             videoTime = 0 + (transitionDuration - timeRemaining); 
+                             // Wait, if we are crossfading to next, next starts at 0 relative to its own start time?
+                             // Ideally yes.
+                             videoTime = (transitionDuration - timeRemaining); 
+                         }
 
-                 if (Math.abs(v.currentTime - videoPointer) > 0.3) {
-                     v.currentTime = videoPointer;
-                 }
-                 
-                 if (isPlaying && v.paused) v.play().catch(() => {});
-                 if (!isPlaying && !v.paused) v.pause();
-                 
-                 drawScaledMedia(ctx, v, canvas.width, canvas.height);
-             }
+                         const sourceDuration = (v.duration && v.duration !== Infinity) ? v.duration : 1;
+                         const videoPointer = videoTime % sourceDuration;
+
+                         // Sync only if significant drift to avoid stuttering
+                         if (Math.abs(v.currentTime - videoPointer) > 0.3) {
+                             v.currentTime = videoPointer;
+                         }
+                         
+                         if (isPlaying && v.paused) v.play().catch(() => {});
+                         if (!isPlaying && !v.paused) v.pause();
+
+                         drawScaledMedia(ctx, v, canvas.width, canvas.height, scale, alpha);
+                    }
+               }
+               ctx.restore();
+          };
+
+          // --- RENDERING LOGIC ---
+          
+          if (!inTransition || transitionEffect === TransitionEffect.NONE) {
+              // Just Draw Current
+              renderItem(currentItem);
+          } else {
+              // TRANSITION MODE
+              const nextIndex = (currentIndex + 1) % playlist.length;
+              const nextItem = playlist[nextIndex];
+              const progress = 1 - (timeRemaining / transitionDuration); // 0 to 1
+
+              // 1. Crossfade
+              if (transitionEffect === TransitionEffect.CROSSFADE) {
+                  renderItem(currentItem, 1); // Base
+                  renderItem(nextItem, progress); // Overlay
+              } 
+              // 2. Flash Black
+              else if (transitionEffect === TransitionEffect.FLASH_BLACK) {
+                  // 0 - 0.5: Fade out Current to Black
+                  // 0.5 - 1: Fade in Next from Black
+                  if (progress < 0.5) {
+                      const fadeOut = 1 - (progress * 2);
+                      renderItem(currentItem, fadeOut);
+                  } else {
+                      const fadeIn = (progress - 0.5) * 2;
+                      renderItem(nextItem, fadeIn);
+                  }
+              }
+              // 3. Zoom Out (Current zooms out and fades, Next appears)
+              else if (transitionEffect === TransitionEffect.ZOOM_OUT) {
+                  const scale = 1 + (progress * 0.2); // 1.0 -> 1.2
+                  renderItem(currentItem, 1 - progress, scale);
+                  renderItem(nextItem, progress); // Next fades in normally
+              }
+              // 4. Glitch Shake
+              else if (transitionEffect === TransitionEffect.SHAKE) {
+                  // Only shake during the middle of transition
+                  const intensity = Math.sin(progress * Math.PI); 
+                  
+                  // RGB Split effect hack: Draw multiple times with slight offset/color filter?
+                  // Canvas 2D filters "drop-shadow" can mimic glitch channels slightly but expensive.
+                  // Let's stick to shake + simple overlay.
+                  
+                  renderItem(currentItem, 1, 1, true); // Shake current
+                  
+                  // Color Dodge overlay? 
+                  ctx.globalCompositeOperation = 'lighter';
+                  renderItem(nextItem, progress, 1, true); // Shake next
+                  ctx.globalCompositeOperation = 'source-over';
+              }
           }
         }
       }
@@ -710,26 +838,7 @@ function App() {
       }
     }
 
-  }, [backgrounds, currentTime, lrcLines, lyricStyle, titleStyle, titleConfig, isPlaying]);
-
-  // Helper to draw image/video cover
-  const drawScaledMedia = (ctx: CanvasRenderingContext2D, media: HTMLImageElement | HTMLVideoElement, cw: number, ch: number) => {
-     let mw = 0, mh = 0;
-     if (media instanceof HTMLVideoElement) {
-         if (media.videoWidth === 0) return;
-         mw = media.videoWidth;
-         mh = media.videoHeight;
-     } else {
-         if (media.naturalWidth === 0) return; // Not loaded
-         mw = media.naturalWidth;
-         mh = media.naturalHeight;
-     }
-
-     const scale = Math.max(cw / mw, ch / mh);
-     const x = (cw / 2) - (mw / 2) * scale;
-     const y = (ch / 2) - (mh / 2) * scale;
-     ctx.drawImage(media, x, y, mw * scale, mh * scale);
-  };
+  }, [backgrounds, currentTime, lrcLines, lyricStyle, titleStyle, titleConfig, isPlaying, transitionEffect, transitionDuration, drawScaledMedia]);
 
   // --- Animation Loop ---
   useEffect(() => {
@@ -900,6 +1009,11 @@ function App() {
 
         aspectRatio={aspectRatio}
         setAspectRatio={setAspectRatio}
+        transitionEffect={transitionEffect}
+        setTransitionEffect={setTransitionEffect}
+        transitionDuration={transitionDuration}
+        setTransitionDuration={setTransitionDuration}
+
         audioFileName={audioFile?.name}
         onOpenLyricEditor={() => {
              if (!audioSrc) {
