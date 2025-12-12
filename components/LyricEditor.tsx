@@ -1,7 +1,9 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { LrcLine } from '../types';
 import { formatTime, generateLrc } from '../utils';
-import { X, Play, Pause, Save, Download, RotateCcw, Plus, Trash2, Languages, Clock, AlertTriangle } from 'lucide-react';
+import { GoogleGenAI } from "@google/genai";
+import { X, Play, Pause, Save, Download, RotateCcw, Plus, Trash2, Languages, Clock, AlertTriangle, Sparkles, Loader2, Globe, ArrowRight } from 'lucide-react';
 
 interface LyricEditorProps {
   isOpen: boolean;
@@ -10,6 +12,21 @@ interface LyricEditorProps {
   initialLines: LrcLine[];
   audioRef: React.RefObject<HTMLAudioElement | null>;
 }
+
+const LANGUAGES = [
+    { label: 'Auto Detect (Source Only)', value: 'Auto Detect' },
+    { label: 'Chinese (Simplified)', value: 'Simplified Chinese' },
+    { label: 'Chinese (Traditional)', value: 'Traditional Chinese' },
+    { label: 'English', value: 'English' },
+    { label: 'Japanese', value: 'Japanese' },
+    { label: 'Korean', value: 'Korean' },
+    { label: 'Spanish', value: 'Spanish' },
+    { label: 'French', value: 'French' },
+    { label: 'German', value: 'German' },
+    { label: 'Russian', value: 'Russian' },
+    { label: 'Portuguese', value: 'Portuguese' },
+    { label: 'Italian', value: 'Italian' },
+];
 
 export const LyricEditor: React.FC<LyricEditorProps> = ({ 
   isOpen, 
@@ -25,6 +42,11 @@ export const LyricEditor: React.FC<LyricEditorProps> = ({
   const [globalOffset, setGlobalOffset] = useState(-0.2); // Default reaction time compensation
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  
+  // AI Translation State
+  const [sourceLang, setSourceLang] = useState('Auto Detect');
+  const [targetLang, setTargetLang] = useState('Simplified Chinese');
+  const [isTranslating, setIsTranslating] = useState(false);
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -137,15 +159,83 @@ export const LyricEditor: React.FC<LyricEditorProps> = ({
       setLines(newLines);
   };
 
-  const addTranslationLines = () => {
-      if (!confirm("Add translation lines? This will insert an empty line after every existing line with the same timestamp.")) return;
+  // --- AI Translation Logic ---
+  const handleAiTranslate = async () => {
+      if (lines.length === 0) return;
+      if (!process.env.API_KEY) {
+          alert("API Key not found. Please ensure process.env.API_KEY is configured.");
+          return;
+      }
       
-      const newLines: LrcLine[] = [];
-      lines.forEach(line => {
-          newLines.push(line);
-          newLines.push({ ...line, text: '' }); // Copy time, empty text
-      });
-      setLines(newLines);
+      setIsTranslating(true);
+      try {
+          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          
+          // Prepare the prompt
+          const lyricsText = lines.map(l => l.text).filter(t => t.trim() !== ''); 
+          
+          const payload = JSON.stringify(lines.map(l => l.text));
+
+          const sourceInstruction = sourceLang === 'Auto Detect' ? 'Detect the source language automatically.' : `The source language is ${sourceLang}.`;
+
+          const prompt = `
+            You are a professional lyrics translator. 
+            ${sourceInstruction}
+            Translate the following array of song lyric lines into ${targetLang}.
+            
+            Rules:
+            1. Return ONLY a JSON object with a single property 'translations' which is an array of strings.
+            2. The 'translations' array MUST have exactly the same number of elements as the input array.
+            3. If an input line is empty, the corresponding translation string must be empty.
+            4. Keep the translation concise and poetic suitable for singing/subtitles.
+            5. Do NOT include the original text in the translation strings. Return ONLY the translated text.
+            
+            Input JSON:
+            ${payload}
+          `;
+
+          const response = await ai.models.generateContent({
+              model: 'gemini-2.5-flash',
+              contents: prompt,
+              config: { responseMimeType: 'application/json' }
+          });
+
+          const result = JSON.parse(response.text);
+          
+          if (result.translations && Array.isArray(result.translations)) {
+              if (result.translations.length !== lines.length) {
+                  alert(`Mismatch in translation line count. Expected ${lines.length}, got ${result.translations.length}. Please try again.`);
+                  return;
+              }
+
+              const mergedLines: LrcLine[] = [];
+
+              lines.forEach((line, idx) => {
+                  // 1. Push Original Line
+                  mergedLines.push(line);
+
+                  // 2. Check and Push Translation Line
+                  const trans = result.translations[idx];
+                  // Ensure translation is valid and distinct from original (to avoid duplicating English if source is English etc)
+                  if (trans && trans.trim() && trans.trim().toLowerCase() !== line.text.trim().toLowerCase()) {
+                      mergedLines.push({
+                          time: line.time, // Same timestamp as original
+                          text: trans.trim()
+                      });
+                  }
+              });
+              
+              setLines(mergedLines);
+          } else {
+              throw new Error("Invalid JSON response structure");
+          }
+
+      } catch (e) {
+          console.error("Translation failed", e);
+          alert("Translation failed. Please try again later.");
+      } finally {
+          setIsTranslating(false);
+      }
   };
 
   const handleDownload = () => {
@@ -247,18 +337,77 @@ export const LyricEditor: React.FC<LyricEditorProps> = ({
                       <p className="text-[10px] text-gray-500 mt-1">Adjusts recorded time to compensate for reaction delay.</p>
                   </div>
 
+                   {/* AI Translation Panel */}
+                   {mode === 'edit' && lines.length > 0 && (
+                       <div className="p-3 bg-gradient-to-b from-blue-900/10 to-purple-900/10 rounded border border-blue-500/30">
+                           <label className="text-xs text-blue-300 font-semibold uppercase tracking-wider mb-2 flex items-center gap-1">
+                               <Sparkles size={12} /> AI Translation (Bilingual)
+                           </label>
+                           
+                           <div className="space-y-3">
+                               {/* Source Lang */}
+                               <div>
+                                   <label className="text-[10px] text-gray-400 block mb-1">Source Language</label>
+                                   <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded px-2 py-1.5">
+                                       <Globe size={14} className="text-gray-500"/>
+                                       <select 
+                                         value={sourceLang} 
+                                         onChange={(e) => setSourceLang(e.target.value)}
+                                         className="bg-transparent text-xs text-gray-300 w-full outline-none border-none cursor-pointer"
+                                         disabled={isTranslating}
+                                       >
+                                           {LANGUAGES.map(lang => (
+                                               <option key={`src-${lang.value}`} value={lang.value}>{lang.label}</option>
+                                           ))}
+                                       </select>
+                                   </div>
+                               </div>
+
+                               <div className="flex justify-center text-gray-600">
+                                   <ArrowRight size={12} className="rotate-90" />
+                               </div>
+
+                               {/* Target Lang */}
+                               <div>
+                                   <label className="text-[10px] text-gray-400 block mb-1">Target Language</label>
+                                   <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded px-2 py-1.5">
+                                       <Languages size={14} className="text-blue-400"/>
+                                       <select 
+                                         value={targetLang} 
+                                         onChange={(e) => setTargetLang(e.target.value)}
+                                         className="bg-transparent text-xs text-white w-full outline-none border-none cursor-pointer"
+                                         disabled={isTranslating}
+                                       >
+                                            {/* Filter out Auto Detect for target */}
+                                           {LANGUAGES.filter(l => l.value !== 'Auto Detect').map(lang => (
+                                               <option key={`tgt-${lang.value}`} value={lang.value}>{lang.label}</option>
+                                           ))}
+                                       </select>
+                                   </div>
+                               </div>
+
+                               <button 
+                                   onClick={handleAiTranslate}
+                                   disabled={isTranslating}
+                                   className="w-full py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-400 text-white rounded text-xs font-bold transition flex items-center justify-center gap-2 mt-2"
+                               >
+                                   {isTranslating ? (
+                                       <><Loader2 size={12} className="animate-spin"/> Translating...</>
+                                   ) : (
+                                       <><Sparkles size={12} /> Create Bilingual</>
+                                   )}
+                               </button>
+                               <p className="text-[9px] text-gray-500 text-center leading-tight">
+                                   Generates new lines for translation with identical timestamps.
+                               </p>
+                           </div>
+                       </div>
+                   )}
+
                   {mode === 'edit' && lines.length > 0 && (
                       <div className="space-y-2 pt-4 border-t border-gray-800">
                           <label className="text-xs text-gray-500 font-semibold uppercase tracking-wider">Bulk Actions</label>
                           
-                          <button 
-                            onClick={addTranslationLines}
-                            className="w-full py-2.5 px-3 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded text-xs flex items-center gap-2 transition"
-                            title="Insert an empty line after every existing line"
-                          >
-                              <Languages size={14} className="text-purple-400"/> Add Translation Lines
-                          </button>
-
                           <button 
                              onClick={() => {
                                  if(confirm("This will reset all timestamps to 00:00.00. Use this if you want to re-record timing from scratch.")) {
