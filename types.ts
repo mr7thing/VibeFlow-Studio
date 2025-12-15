@@ -40,6 +40,41 @@ export enum TransitionEffect {
   SHAKE = 'shake',
 }
 
+// --- Visualizer Types Split ---
+
+export enum OverlayType {
+  NONE = 'none',
+  CIRCULAR_SPECTRUM = 'circular_spectrum', 
+  WAVE_RING = 'wave_ring',                 
+  STAR_FIELD = 'star_field',
+  PARTICLE_TUNNEL = 'particle_tunnel', // New Geometric Tunnel
+  CLASSIC_BARS = 'classic_bars',
+}
+
+export enum PostProcessType {
+  NONE = 'none',
+  LIQUID_WARP = 'liquid_warp',      
+  VHS_GLITCH = 'vhs_glitch',         
+  RGB_PULSE = 'rgb_pulse',           
+  KALEIDOSCOPE = 'kaleidoscope',     
+  MIRROR_ZOOM = 'mirror_zoom',       
+}
+
+export interface VisualizerConfig {
+  overlay: {
+    type: OverlayType;
+    color: string;
+    opacity: number;      
+    sensitivity: number;  
+    barCount: number;
+  };
+  postProcess: {
+    type: PostProcessType;
+    opacity: number;
+    sensitivity: number;
+  };
+}
+
 export interface LyricStyle {
   fontSize: number;
   fontFamily: string;
@@ -102,6 +137,8 @@ export interface SavedProjectData {
   // New Global Configs
   transitionEffect: TransitionEffect;
   transitionDuration: number;
+  // Visualizer
+  visualizerConfig?: VisualizerConfig;
 
   lrcLines: LrcLine[];
   // Assets Metadata

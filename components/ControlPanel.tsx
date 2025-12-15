@@ -1,7 +1,7 @@
 
 import React, { useRef, useState } from 'react';
-import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy, Sparkles, MoveHorizontal, MoveVertical, Heading, Layers, ChevronUp, ChevronDown, FolderHeart, Zap } from 'lucide-react';
-import { BackgroundMedia, MediaType, LyricStyle, AspectRatio, LyricEffect, TransitionEffect } from '../types';
+import { Upload, Music, FileText, Image as ImageIcon, Trash2, Settings, Type, Edit3, Copy, Sparkles, MoveHorizontal, MoveVertical, Heading, Layers, ChevronUp, ChevronDown, FolderHeart, Zap, Activity, Waves, MonitorPlay } from 'lucide-react';
+import { BackgroundMedia, MediaType, LyricStyle, AspectRatio, LyricEffect, TransitionEffect, VisualizerConfig, OverlayType, PostProcessType } from '../types';
 
 interface ControlPanelProps {
   onAudioUpload: (file: File) => void;
@@ -29,6 +29,10 @@ interface ControlPanelProps {
   transitionDuration: number;
   setTransitionDuration: (duration: number) => void;
 
+  // Visualizer Settings
+  visualizerConfig: VisualizerConfig;
+  setVisualizerConfig: (config: VisualizerConfig) => void;
+
   audioFileName?: string;
   onOpenLyricEditor: () => void;
   onOpenTitleEditor: () => void;
@@ -54,6 +58,8 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   setTransitionEffect,
   transitionDuration,
   setTransitionDuration,
+  visualizerConfig,
+  setVisualizerConfig,
   audioFileName,
   onOpenLyricEditor,
   onOpenTitleEditor,
@@ -76,6 +82,20 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
       const text = await file.text();
       onLrcUpload(text);
     }
+  };
+
+  const updateOverlay = (partial: Partial<typeof visualizerConfig.overlay>) => {
+      setVisualizerConfig({
+          ...visualizerConfig,
+          overlay: { ...visualizerConfig.overlay, ...partial }
+      });
+  };
+
+  const updatePostProcess = (partial: Partial<typeof visualizerConfig.postProcess>) => {
+      setVisualizerConfig({
+          ...visualizerConfig,
+          postProcess: { ...visualizerConfig.postProcess, ...partial }
+      });
   };
 
   return (
@@ -220,6 +240,99 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
              </div>
           </div>
         )}
+
+        {/* Section: Visual Effects (Split) */}
+        <div className="space-y-4">
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-2">
+                <Waves size={14} /> Visual FX
+            </h2>
+            
+            {/* 1. Geometric Overlay */}
+            <div className="p-3 bg-gray-800/50 rounded border border-gray-700/50 space-y-3">
+                 <h3 className="text-xs font-semibold text-gray-400 flex items-center gap-1">
+                    <Activity size={10} className="text-blue-400"/> Geometric Overlay
+                 </h3>
+                 <div>
+                    <select 
+                        value={visualizerConfig.overlay.type}
+                        onChange={(e) => updateOverlay({ type: e.target.value as OverlayType })}
+                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:border-blue-500 outline-none"
+                    >
+                        <option value={OverlayType.NONE}>None</option>
+                        <option value={OverlayType.CIRCULAR_SPECTRUM}>⭕ Circular Spectrum</option>
+                        <option value={OverlayType.WAVE_RING}>〰️ Waveform Ring</option>
+                        <option value={OverlayType.STAR_FIELD}>🌌 Star Field (3D)</option>
+                        <option value={OverlayType.PARTICLE_TUNNEL}>🌀 Geometric Tunnel</option>
+                        <option value={OverlayType.CLASSIC_BARS}>📊 Classic Bars</option>
+                    </select>
+                </div>
+                {visualizerConfig.overlay.type !== OverlayType.NONE && (
+                     <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="text-[10px] text-gray-400 block mb-1">Color</label>
+                            <input 
+                                type="color" 
+                                value={visualizerConfig.overlay.color}
+                                onChange={(e) => updateOverlay({ color: e.target.value })}
+                                className="w-full h-5 bg-transparent cursor-pointer rounded"
+                            />
+                        </div>
+                        <div>
+                            <label className="text-[10px] text-gray-400 block mb-1">Scale / Reactivity</label>
+                             <input 
+                                type="range" min="0.5" max="2" step="0.1"
+                                value={visualizerConfig.overlay.sensitivity} // Reusing sensitivity for scale/reactivity
+                                onChange={(e) => updateOverlay({ sensitivity: Number(e.target.value) })}
+                                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            {/* 2. Post Processing */}
+            <div className="p-3 bg-gray-800/50 rounded border border-gray-700/50 space-y-3">
+                 <h3 className="text-xs font-semibold text-gray-400 flex items-center gap-1">
+                    <MonitorPlay size={10} className="text-pink-400"/> Screen Distortion
+                 </h3>
+                 <div>
+                    <select 
+                        value={visualizerConfig.postProcess.type}
+                        onChange={(e) => updatePostProcess({ type: e.target.value as PostProcessType })}
+                        className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-300 focus:border-blue-500 outline-none"
+                    >
+                        <option value={PostProcessType.NONE}>None</option>
+                        <option value={PostProcessType.LIQUID_WARP}>🌊 Liquid Warp</option>
+                        <option value={PostProcessType.VHS_GLITCH}>📼 VHS Glitch</option>
+                        <option value={PostProcessType.RGB_PULSE}>⚡ RGB Pulse</option>
+                        <option value={PostProcessType.KALEIDOSCOPE}>💎 Kaleidoscope</option>
+                        <option value={PostProcessType.MIRROR_ZOOM}>🪩 Mirror Zoom</option>
+                    </select>
+                </div>
+                {visualizerConfig.postProcess.type !== PostProcessType.NONE && (
+                     <div className="grid grid-cols-2 gap-3">
+                        <div>
+                             <label className="text-[10px] text-gray-400 block mb-1">Intensity</label>
+                             <input 
+                                type="range" min="0" max="1" step="0.05"
+                                value={visualizerConfig.postProcess.opacity}
+                                onChange={(e) => updatePostProcess({ opacity: Number(e.target.value) })}
+                                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                        </div>
+                        <div>
+                             <label className="text-[10px] text-gray-400 block mb-1">Audio React</label>
+                             <input 
+                                type="range" min="0" max="3" step="0.1"
+                                value={visualizerConfig.postProcess.sensitivity}
+                                onChange={(e) => updatePostProcess({ sensitivity: Number(e.target.value) })}
+                                className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer"
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
 
         {/* Section: Output Settings */}
         <div className="space-y-4">

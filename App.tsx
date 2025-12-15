@@ -4,7 +4,7 @@ import { ControlPanel } from './components/ControlPanel';
 import { LyricEditor } from './components/LyricEditor';
 import { TitleEditor } from './components/TitleEditor';
 import { ProjectManager } from './components/ProjectManager';
-import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, LyricEffect, TitleConfig, TitleLayoutMode, SavedProjectData, TransitionEffect } from './types';
+import { BackgroundMedia, MediaType, LyricStyle, LrcLine, AspectRatio, LyricEffect, TitleConfig, TitleLayoutMode, SavedProjectData, TransitionEffect, VisualizerConfig, OverlayType, PostProcessType } from './types';
 import { parseLrc, formatTime, getResolution } from './utils';
 import { saveProjectToDB, loadProjectFromDB } from './utils/db';
 import { Play, Pause, Circle, Download, AlertCircle } from 'lucide-react';
@@ -51,6 +51,21 @@ const DEFAULT_TITLE_CONFIG: TitleConfig = {
     producer: ''
 };
 
+const DEFAULT_VISUALIZER_CONFIG: VisualizerConfig = {
+    overlay: {
+        type: OverlayType.NONE,
+        color: '#ffffff',
+        opacity: 0.8,
+        sensitivity: 1.5,
+        barCount: 64
+    },
+    postProcess: {
+        type: PostProcessType.NONE,
+        opacity: 0.8,
+        sensitivity: 1.5
+    }
+};
+
 function App() {
   // --- State ---
   const [audioSrc, setAudioSrc] = useState<string | null>(null);
@@ -68,6 +83,9 @@ function App() {
   const [transitionEffect, setTransitionEffect] = useState<TransitionEffect>(TransitionEffect.CROSSFADE);
   const [transitionDuration, setTransitionDuration] = useState<number>(1.5);
 
+  // Visualizer Settings
+  const [visualizerConfig, setVisualizerConfig] = useState<VisualizerConfig>(DEFAULT_VISUALIZER_CONFIG);
+
   const [isPlaying, setIsPlaying] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -80,12 +98,26 @@ function App() {
   // --- Refs ---
   const audioRef = useRef<HTMLAudioElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null); // Re-introduce for Post-FX
+  
   const animationFrameRef = useRef<number | undefined>(undefined);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   
+  // Audio Analysis Refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
+  const frequencyDataRef = useRef<Uint8Array | null>(null);
+  const timeDomainDataRef = useRef<Uint8Array | null>(null);
+  
+  // Visualizer Refs
+  const particlesRef = useRef<{x: number, y: number, z: number}[]>([]);
+  const tunnelRef = useRef({ zOffset: 0, rotation: 0 }); // New ref for tunnel state
+  
   // Hidden video elements cache for background videos
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
+
 
   // --- Helpers ---
 
@@ -99,6 +131,40 @@ function App() {
       audioRef.current.load();
     }
   };
+
+  // Setup Audio Context (Call this on user interaction like Play)
+  const setupAudioContext = () => {
+      if (!audioRef.current) return;
+      if (audioContextRef.current) {
+           if(audioContextRef.current.state === 'suspended') {
+               audioContextRef.current.resume();
+           }
+           return; // Already setup
+      }
+
+      try {
+          // Initialize Context
+          const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+          const ctx = new AudioContext();
+          const analyser = ctx.createAnalyser();
+          // Use smaller FFT for cleaner bar visualization, or large for waveform
+          analyser.fftSize = 2048; 
+          
+          // Connect source
+          const source = ctx.createMediaElementSource(audioRef.current);
+          source.connect(analyser);
+          analyser.connect(ctx.destination); // Connect back to speakers
+
+          audioContextRef.current = ctx;
+          analyserRef.current = analyser;
+          sourceNodeRef.current = source;
+          frequencyDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+          timeDomainDataRef.current = new Uint8Array(analyser.frequencyBinCount);
+      } catch (e) {
+          console.error("Audio Context Setup Error:", e);
+      }
+  };
+
 
   // Handle LRC
   const handleLrcUpload = (text: string) => {
@@ -138,8 +204,6 @@ function App() {
   const removeBackground = (id: string) => {
     setBackgrounds(prev => {
         const bgToRemove = prev.find(b => b.id === id);
-        
-        // Only clean up video ref if no other background uses the same src (duplicates)
         if (bgToRemove && bgToRemove.type === MediaType.VIDEO) {
              const othersUsingSrc = prev.filter(b => b.id !== id && b.src === bgToRemove.src).length > 0;
              if (!othersUsingSrc) {
@@ -162,11 +226,9 @@ function App() {
           
           const copy: BackgroundMedia = {
               ...original,
-              id: Math.random().toString(36).substr(2, 9), // New ID
+              id: Math.random().toString(36).substr(2, 9), 
               // Src and file ref remain the same, which is fine as they point to the same blob
           };
-          
-          // Append to end instead of inserting after
           return [...prev, copy];
       });
   };
@@ -175,17 +237,11 @@ function App() {
       setBackgrounds(prev => {
           const index = prev.findIndex(b => b.id === id);
           if (index === -1) return prev;
-
-          // Check bounds
           if (direction === 'up' && index === 0) return prev;
           if (direction === 'down' && index === prev.length - 1) return prev;
-
           const newArr = [...prev];
           const swapIndex = direction === 'up' ? index - 1 : index + 1;
-          
-          // Swap
           [newArr[index], newArr[swapIndex]] = [newArr[swapIndex], newArr[index]];
-          
           return newArr;
       });
   };
@@ -198,7 +254,6 @@ function App() {
   
   const handleSaveProject = async (name: string) => {
       const projectId = Date.now().toString(); // Simple ID
-      
       const projectData: SavedProjectData = {
           id: projectId,
           name,
@@ -209,6 +264,7 @@ function App() {
           aspectRatio,
           transitionEffect,
           transitionDuration,
+          visualizerConfig,
           lrcLines,
           audioFileName: audioFile?.name,
           backgrounds: backgrounds.map(bg => ({
@@ -218,18 +274,11 @@ function App() {
               fileName: bg.file.name
           }))
       };
-
-      // Prepare Blobs
-      const bgBlobs = backgrounds.map(bg => ({
-          id: bg.id,
-          blob: bg.file
-      }));
-
+      const bgBlobs = backgrounds.map(bg => ({ id: bg.id, blob: bg.file }));
       await saveProjectToDB(projectData, audioFile, bgBlobs);
   };
 
   const handleLoadProject = async (id: string) => {
-      // 1. Clear current state
       setIsPlaying(false);
       if (audioRef.current) audioRef.current.pause();
       if(audioSrc) URL.revokeObjectURL(audioSrc);
@@ -237,18 +286,31 @@ function App() {
       
       const { data, audioBlob, backgroundBlobs } = await loadProjectFromDB(id);
 
-      // 2. Restore Settings
       setLyricStyle(data.lyricStyle);
       setTitleStyle(data.titleStyle);
       setTitleConfig(data.titleConfig);
       setAspectRatio(data.aspectRatio);
       setLrcLines(data.lrcLines);
       
-      // Support legacy projects
       if(data.transitionEffect) setTransitionEffect(data.transitionEffect);
       if(data.transitionDuration) setTransitionDuration(data.transitionDuration);
+      
+      // Handle legacy project structure or load new config
+      if (data.visualizerConfig) {
+          const vizConfig = data.visualizerConfig as any;
+          if ('overlay' in vizConfig) {
+              setVisualizerConfig(vizConfig);
+          } else {
+              // Migration for projects saved before split
+              setVisualizerConfig({
+                  overlay: { ...DEFAULT_VISUALIZER_CONFIG.overlay, ...vizConfig }, // Best effort map
+                  postProcess: DEFAULT_VISUALIZER_CONFIG.postProcess
+              });
+          }
+      } else {
+          setVisualizerConfig(DEFAULT_VISUALIZER_CONFIG);
+      }
 
-      // 3. Restore Audio
       if (audioBlob) {
           const url = URL.createObjectURL(audioBlob);
           setAudioSrc(url);
@@ -258,14 +320,12 @@ function App() {
           setAudioFile(null);
       }
 
-      // 4. Restore Backgrounds
       const restoredBackgrounds: BackgroundMedia[] = [];
       data.backgrounds.forEach(bgMeta => {
           const blob = backgroundBlobs.get(bgMeta.id);
           if (blob) {
               const url = URL.createObjectURL(blob);
               const file = new File([blob], bgMeta.fileName, { type: blob.type });
-              
               if (bgMeta.type === MediaType.VIDEO) {
                  if (!videoElementsRef.current.has(url)) {
                     const v = document.createElement('video');
@@ -276,7 +336,6 @@ function App() {
                     videoElementsRef.current.set(url, v);
                 }
               }
-
               restoredBackgrounds.push({
                   id: bgMeta.id,
                   type: bgMeta.type,
@@ -298,13 +357,13 @@ function App() {
           aspectRatio,
           transitionEffect,
           transitionDuration,
+          visualizerConfig,
           _meta: {
               audioName: audioFile?.name,
               backgroundCount: backgrounds.length,
               exportedAt: new Date().toISOString()
           }
       };
-      
       const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -340,24 +399,404 @@ function App() {
      ctx.globalAlpha = 1.0; // Reset
   }, []);
 
+  // 1. Geometric Visualizers (Overlay)
+  const drawGeometricOverlay = useCallback((ctx: CanvasRenderingContext2D, width: number, height: number, energy: { bass: number, mid: number, treble: number }) => {
+     const { type, sensitivity, opacity, color } = visualizerConfig.overlay;
+     const cx = width / 2;
+     const cy = height / 2;
+     
+     if (type === OverlayType.NONE) return;
+
+     ctx.save();
+     
+     // Use screen or overlay blend mode for that "glowing" look over backgrounds
+     ctx.globalCompositeOperation = 'source-over'; 
+     ctx.globalAlpha = opacity;
+     ctx.fillStyle = color;
+     ctx.strokeStyle = color;
+
+     if (type === OverlayType.CIRCULAR_SPECTRUM) {
+         if (frequencyDataRef.current) {
+             const data = frequencyDataRef.current;
+             const bars = 180; 
+             const step = Math.floor(800 / bars); 
+             
+             const baseRadius = Math.min(width, height) * 0.2 + (energy.bass * 0.1 * sensitivity);
+
+             ctx.beginPath();
+             for (let i = 0; i < bars; i++) {
+                 let val = 0;
+                 for(let j=0; j<step; j++) val += data[(i * step) + j];
+                 val /= step;
+                 
+                 const barHeight = Math.max(2, (val * sensitivity * 0.8));
+                 const rad = (i / bars) * (Math.PI * 2);
+                 const x1 = cx + Math.cos(rad) * baseRadius;
+                 const y1 = cy + Math.sin(rad) * baseRadius;
+                 const x2 = cx + Math.cos(rad) * (baseRadius + barHeight);
+                 const y2 = cy + Math.sin(rad) * (baseRadius + barHeight);
+                 
+                 ctx.moveTo(x1, y1);
+                 ctx.lineTo(x2, y2);
+             }
+             ctx.lineWidth = 2;
+             ctx.lineCap = 'round';
+             ctx.stroke();
+
+             ctx.beginPath();
+             ctx.arc(cx, cy, baseRadius - 5, 0, Math.PI * 2);
+             ctx.fillStyle = `${color}40`;
+             ctx.fill();
+         }
+     }
+     else if (type === OverlayType.WAVE_RING) {
+         if (timeDomainDataRef.current) {
+             const data = timeDomainDataRef.current;
+             const slices = 360; 
+             const step = Math.floor(data.length / slices);
+             const radius = Math.min(width, height) * 0.25;
+
+             ctx.beginPath();
+             for(let i=0; i < slices; i++) {
+                 const v = (data[i * step] - 128) / 128.0; 
+                 const r = radius + (v * 100 * sensitivity);
+                 const rad = (i / slices) * (Math.PI * 2);
+                 
+                 const x = cx + Math.cos(rad) * r;
+                 const y = cy + Math.sin(rad) * r;
+
+                 if (i === 0) ctx.moveTo(x, y);
+                 else ctx.lineTo(x, y);
+             }
+             ctx.closePath();
+             ctx.lineWidth = 3;
+             ctx.stroke();
+             ctx.fillStyle = `${color}20`;
+             ctx.fill();
+         }
+     }
+     else if (type === OverlayType.STAR_FIELD) {
+         if (particlesRef.current.length < 200) {
+             for(let i=0; i<200; i++) {
+                 particlesRef.current.push({
+                     x: (Math.random() - 0.5) * width * 2,
+                     y: (Math.random() - 0.5) * height * 2,
+                     z: Math.random() * width
+                 });
+             }
+         }
+         
+         const speed = 5 + (energy.mid * 0.5 * sensitivity);
+         
+         particlesRef.current.forEach(p => {
+             p.z -= speed;
+             if (p.z <= 0) {
+                 p.z = width;
+                 p.x = (Math.random() - 0.5) * width * 2;
+                 p.y = (Math.random() - 0.5) * height * 2;
+             }
+             const k = 128.0 / p.z;
+             const px = cx + p.x * k;
+             const py = cy + p.y * k;
+             
+             if (px >= 0 && px <= width && py >= 0 && py <= height) {
+                 const size = (1 - p.z / width) * 4;
+                 const alpha = (1 - p.z / width);
+                 ctx.globalAlpha = alpha * opacity;
+                 ctx.fillStyle = color;
+                 ctx.beginPath();
+                 ctx.arc(px, py, size, 0, Math.PI*2);
+                 ctx.fill();
+             }
+         });
+     }
+     else if (type === OverlayType.PARTICLE_TUNNEL) {
+        // Geometric Hexagon Tunnel
+        const maxDepth = 1000;
+        const numRings = 20;
+        const ringSpacing = maxDepth / numRings;
+        const bassKick = (energy.bass / 255);
+        const rotationSpeed = 0.005 + ((energy.mid / 255) * 0.02 * sensitivity);
+        const forwardSpeed = 2 + (bassKick * 10 * sensitivity);
+
+        // Update state
+        tunnelRef.current.zOffset = (tunnelRef.current.zOffset + forwardSpeed) % ringSpacing;
+        tunnelRef.current.rotation += rotationSpeed;
+
+        const sides = 6; // Hexagon
+        
+        ctx.lineWidth = 2 * sensitivity;
+        ctx.lineCap = 'round';
+
+        // Draw Rings
+        for (let i = 0; i < numRings; i++) {
+            const z = maxDepth - (i * ringSpacing) - tunnelRef.current.zOffset;
+            
+            // Perspective Projection
+            const fov = 300;
+            const scale = fov / (fov + z); // Standard 3D projection
+            if (scale <= 0) continue;
+
+            const alpha = (z / maxDepth); // Fade out as it gets deeper? Or fade out as it gets closer? 
+            // Let's fade out at the back (z=1000) and full opacity near camera (z=0)
+            ctx.globalAlpha = (1 - (z/maxDepth)) * opacity;
+            
+            // Calculate radius based on z (perspective) but also Audio
+            const baseRadius = Math.min(width, height) * 0.8;
+            const r = baseRadius * scale * (1 + (bassKick * 0.2));
+
+            const rotation = tunnelRef.current.rotation + (i * 0.1); // Twist effect
+
+            ctx.beginPath();
+            for (let j = 0; j <= sides; j++) {
+                const theta = (j / sides) * Math.PI * 2 + rotation;
+                const px = cx + Math.cos(theta) * r;
+                const py = cy + Math.sin(theta) * r;
+                if (j === 0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.stroke();
+
+            // Connect this ring to the next one (wireframe mesh)
+            if (i > 0) {
+                 const prevZ = maxDepth - ((i-1) * ringSpacing) - tunnelRef.current.zOffset;
+                 const prevScale = fov / (fov + prevZ);
+                 const prevR = baseRadius * prevScale * (1 + (bassKick * 0.2));
+                 const prevRotation = tunnelRef.current.rotation + ((i-1) * 0.1);
+
+                 // Draw connections
+                 ctx.lineWidth = 1;
+                 ctx.globalAlpha = (1 - (z/maxDepth)) * 0.3 * opacity; // Fainter lines for connections
+                 for (let j = 0; j < sides; j++) {
+                    const theta = (j / sides) * Math.PI * 2 + rotation;
+                    const prevTheta = (j / sides) * Math.PI * 2 + prevRotation;
+                    
+                    const px = cx + Math.cos(theta) * r;
+                    const py = cy + Math.sin(theta) * r;
+                    
+                    const ppx = cx + Math.cos(prevTheta) * prevR;
+                    const ppy = cy + Math.sin(prevTheta) * prevR;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(px, py);
+                    ctx.lineTo(ppx, ppy);
+                    ctx.stroke();
+                 }
+                 ctx.lineWidth = 2 * sensitivity; // Reset for main rings
+            }
+        }
+     }
+     else if (type === OverlayType.CLASSIC_BARS) {
+         if (frequencyDataRef.current) {
+             const data = frequencyDataRef.current;
+             const barCount = 64;
+             const step = Math.floor(1024 / barCount);
+             const barW = width / barCount;
+             
+             for(let i=0; i<barCount; i++) {
+                 const val = data[i * step];
+                 const h = (val / 255) * (height * 0.4) * sensitivity;
+                 const x = i * barW;
+                 const y = height - h;
+                 
+                 ctx.fillStyle = color;
+                 ctx.fillRect(x + 1, y, barW - 2, h);
+                 ctx.fillStyle = `${color}30`;
+                 ctx.fillRect(x + 1, height, barW - 2, h * 0.5);
+             }
+         }
+     }
+
+     ctx.restore();
+  }, [visualizerConfig.overlay]);
+
+  // 2. Post-Processing Visualizers (Offscreen -> Main)
+  const applyPostProcessing = useCallback((ctx: CanvasRenderingContext2D, sourceCanvas: HTMLCanvasElement, width: number, height: number, energy: { bass: number, mid: number, treble: number }) => {
+    const { type, sensitivity, opacity } = visualizerConfig.postProcess;
+    
+    if (type === PostProcessType.NONE) {
+        ctx.drawImage(sourceCanvas, 0, 0);
+        return;
+    }
+
+    const time = performance.now() / 1000;
+
+    if (type === PostProcessType.LIQUID_WARP) {
+        const amp = (energy.bass / 255) * 50 * sensitivity;
+        const freq = 0.02;
+        const sliceHeight = 5; 
+        
+        ctx.save();
+        for (let y = 0; y < height; y += sliceHeight) {
+            const xOffset = Math.sin(y * freq + time * 3) * amp * opacity;
+            const scaleX = 1 + (Math.sin(y * 0.01 + time) * 0.05 * amp/10);
+            ctx.drawImage(sourceCanvas, 0, y, width, sliceHeight, xOffset - (width*(scaleX-1)/2), y, width * scaleX, sliceHeight);
+        }
+        ctx.restore();
+    } 
+    else if (type === PostProcessType.VHS_GLITCH) {
+        const bassKick = (energy.bass / 255) > 0.6 ? (energy.bass/255) : 0;
+        const shift = (5 + bassKick * 50 * sensitivity) * opacity;
+        
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0,0,width,height);
+        
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 1;
+        ctx.drawImage(sourceCanvas, 0, 0);
+
+        if (opacity > 0.1) {
+           ctx.globalCompositeOperation = 'screen';
+           ctx.globalAlpha = 0.5 * opacity;
+           ctx.drawImage(sourceCanvas, shift, 0);
+           ctx.globalAlpha = 0.5 * opacity;
+           ctx.drawImage(sourceCanvas, -shift, 0);
+        }
+
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        for(let y=0; y<height; y+=4) {
+            ctx.fillRect(0, y, width, 1);
+        }
+
+        if (bassKick > 0.8) {
+            ctx.globalCompositeOperation = 'overlay';
+            ctx.fillStyle = `rgba(255,255,255,${bassKick * 0.2})`;
+            ctx.fillRect(0, Math.random()*height, width, height/10);
+        }
+        ctx.restore();
+    }
+    else if (type === PostProcessType.KALEIDOSCOPE) {
+        const halfW = width / 2;
+        const halfH = height / 2;
+        
+        ctx.save();
+        ctx.drawImage(sourceCanvas, 0, 0, halfW, halfH, 0, 0, halfW, halfH);
+        
+        ctx.save();
+        ctx.translate(width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(sourceCanvas, 0, 0, halfW, halfH, 0, 0, halfW, halfH);
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(0, height);
+        ctx.scale(1, -1);
+        ctx.drawImage(sourceCanvas, 0, 0, halfW, halfH, 0, 0, halfW, halfH);
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(width, height);
+        ctx.scale(-1, -1);
+        ctx.drawImage(sourceCanvas, 0, 0, halfW, halfH, 0, 0, halfW, halfH);
+        ctx.restore();
+        
+        const rot = (energy.mid / 255) * Math.PI * sensitivity * opacity;
+        if (rot > 0.1) {
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = 0.3;
+            ctx.translate(halfW, halfH);
+            ctx.rotate(time + rot);
+            ctx.drawImage(sourceCanvas, -halfW/2, -halfH/2, halfW, halfH);
+        }
+        ctx.restore();
+    }
+    else if (type === PostProcessType.RGB_PULSE) {
+        const beat = energy.bass / 255;
+        const zoom = 1 + (beat * 0.1 * sensitivity * opacity);
+        const dw = width * zoom;
+        const dh = height * zoom;
+        const dx = (width - dw) / 2;
+        const dy = (height - dh) / 2;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0,0,width,height);
+
+        ctx.globalCompositeOperation = 'screen';
+        ctx.globalAlpha = 1;
+        ctx.drawImage(sourceCanvas, dx - (20 * beat * opacity), dy, dw, dh);
+        
+        ctx.globalCompositeOperation = 'lighten';
+        ctx.globalAlpha = 0.8;
+        ctx.drawImage(sourceCanvas, dx + (20 * beat * opacity), dy, dw, dh);
+        
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 0.5;
+        ctx.drawImage(sourceCanvas, dx, dy, dw, dh);
+        ctx.restore();
+    }
+    else if (type === PostProcessType.MIRROR_ZOOM) {
+        const zoom = 1 + (Math.sin(time) * 0.05) + ((energy.bass/255) * 0.2 * sensitivity * opacity);
+        ctx.save();
+        ctx.translate(width/2, height/2);
+        ctx.scale(zoom, zoom);
+        ctx.translate(-width/2, -height/2);
+
+        ctx.drawImage(sourceCanvas, 0, 0, width, height/2, 0, 0, width, height/2);
+        
+        ctx.save();
+        ctx.translate(0, height);
+        ctx.scale(1, -1);
+        ctx.drawImage(sourceCanvas, 0, 0, width, height/2, 0, 0, width, height/2);
+        ctx.restore();
+        ctx.restore();
+    }
+    else {
+        ctx.drawImage(sourceCanvas, 0, 0);
+    }
+
+ }, [visualizerConfig.postProcess]);
+
   const drawCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) return;
 
-    // 1. Clear
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // --- Audio Analysis ---
+    let bass = 0, mid = 0, treble = 0;
+    if (analyserRef.current && frequencyDataRef.current && timeDomainDataRef.current) {
+        analyserRef.current.getByteFrequencyData(frequencyDataRef.current);
+        analyserRef.current.getByteTimeDomainData(timeDomainDataRef.current);
+        const data = frequencyDataRef.current;
+        const len = data.length;
+        
+        for(let i=0; i<4; i++) bass += data[i];
+        bass /= 4;
+        for(let i=4; i<32; i++) mid += data[i];
+        mid /= 28;
+        for(let i=32; i<128 && i < len; i++) treble += data[i];
+        treble /= 96;
+    }
+    const audioEnergy = { bass, mid, treble };
 
-    // 2. Determine Backgrounds & Transitions
+    // --- RENDER PIPELINE ---
+    
+    // We always use offscreen canvas now to support post-process potential
+    if (!offscreenCanvasRef.current) {
+        offscreenCanvasRef.current = document.createElement('canvas');
+    }
+    const off = offscreenCanvasRef.current;
+    if (off.width !== canvas.width || off.height !== canvas.height) {
+        off.width = canvas.width;
+        off.height = canvas.height;
+    }
+    const offCtx = off.getContext('2d');
+    if (!offCtx) return;
+
+    // --- 1. DRAW BACKGROUND (To offCtx) ---
+    offCtx.fillStyle = '#000';
+    offCtx.fillRect(0, 0, off.width, off.height);
+
     if (backgrounds.length > 0) {
-      // Build playlist timeline
       let totalCycleDuration = 0;
       const playlist = backgrounds.map(bg => {
          let duration = bg.duration;
          if (bg.type === MediaType.VIDEO) {
              const v = videoElementsRef.current.get(bg.src);
-             // Default auto duration if 0
              if (duration === 0) {
                  if (v && v.duration && !isNaN(v.duration) && v.duration !== Infinity) {
                      duration = v.duration;
@@ -378,121 +817,86 @@ function App() {
         if (currentIndex !== -1) {
           const currentItem = playlist[currentIndex];
           const timeRemaining = currentItem.end - loopTime;
-          
-          // Should we transition?
           const inTransition = timeRemaining <= transitionDuration && backgrounds.length > 1;
           
-          // Prepare Draw Function
-          const renderItem = (item: typeof playlist[0], alpha: number = 1, scale: number = 1, shake: boolean = false) => {
-               ctx.save();
-               if (shake) {
-                   const shakeAmount = 20 * alpha; // Shake intensity
-                   const dx = (Math.random() - 0.5) * shakeAmount;
-                   const dy = (Math.random() - 0.5) * shakeAmount;
-                   ctx.translate(dx, dy);
-               }
-
+          const renderItem = (item: typeof playlist[0], alpha: number = 1, scale: number = 1) => {
+               offCtx.save();
                if (item.type === MediaType.IMAGE) {
                     const img = new Image();
                     img.src = item.src;
-                    drawScaledMedia(ctx, img, canvas.width, canvas.height, scale, alpha);
+                    drawScaledMedia(offCtx, img, off.width, off.height, scale, alpha);
                } else if (item.type === MediaType.VIDEO) {
                     const v = videoElementsRef.current.get(item.src);
                     if (v) {
-                         // Sync video time relative to item start
-                         // This is tricky for looping playlist.
-                         // Calculate time relative to the START of this item's slot in the loop
-                         // We need to handle the case where we are 'transitioning to' this video
-                         // or 'transitioning from' this video.
-                         
-                         // Current Logic: Sync based on loopTime.
-                         // For next item (during transition), loopTime would technically be 'future'.
-                         // But we want it to start from 0.
-                         
                          let videoTime = 0;
                          if (item === currentItem) {
                              videoTime = loopTime - item.start;
                          } else {
-                             // It's the next item
-                             videoTime = 0 + (transitionDuration - timeRemaining); 
-                             // Wait, if we are crossfading to next, next starts at 0 relative to its own start time?
-                             // Ideally yes.
                              videoTime = (transitionDuration - timeRemaining); 
                          }
-
                          const sourceDuration = (v.duration && v.duration !== Infinity) ? v.duration : 1;
                          const videoPointer = videoTime % sourceDuration;
-
-                         // Sync only if significant drift to avoid stuttering
                          if (Math.abs(v.currentTime - videoPointer) > 0.3) {
                              v.currentTime = videoPointer;
                          }
-                         
                          if (isPlaying && v.paused) v.play().catch(() => {});
                          if (!isPlaying && !v.paused) v.pause();
-
-                         drawScaledMedia(ctx, v, canvas.width, canvas.height, scale, alpha);
+                         drawScaledMedia(offCtx, v, off.width, off.height, scale, alpha);
                     }
                }
-               ctx.restore();
+               offCtx.restore();
           };
 
-          // --- RENDERING LOGIC ---
-          
           if (!inTransition || transitionEffect === TransitionEffect.NONE) {
-              // Just Draw Current
               renderItem(currentItem);
           } else {
-              // TRANSITION MODE
               const nextIndex = (currentIndex + 1) % playlist.length;
               const nextItem = playlist[nextIndex];
-              const progress = 1 - (timeRemaining / transitionDuration); // 0 to 1
+              const progress = 1 - (timeRemaining / transitionDuration);
 
-              // 1. Crossfade
               if (transitionEffect === TransitionEffect.CROSSFADE) {
-                  renderItem(currentItem, 1); // Base
-                  renderItem(nextItem, progress); // Overlay
+                  renderItem(currentItem, 1);
+                  renderItem(nextItem, progress);
               } 
-              // 2. Flash Black
               else if (transitionEffect === TransitionEffect.FLASH_BLACK) {
-                  // 0 - 0.5: Fade out Current to Black
-                  // 0.5 - 1: Fade in Next from Black
                   if (progress < 0.5) {
-                      const fadeOut = 1 - (progress * 2);
-                      renderItem(currentItem, fadeOut);
+                      renderItem(currentItem, 1 - (progress * 2));
                   } else {
-                      const fadeIn = (progress - 0.5) * 2;
-                      renderItem(nextItem, fadeIn);
+                      renderItem(nextItem, (progress - 0.5) * 2);
                   }
               }
-              // 3. Zoom Out (Current zooms out and fades, Next appears)
               else if (transitionEffect === TransitionEffect.ZOOM_OUT) {
-                  const scale = 1 + (progress * 0.2); // 1.0 -> 1.2
+                  const scale = 1 + (progress * 0.2);
                   renderItem(currentItem, 1 - progress, scale);
-                  renderItem(nextItem, progress); // Next fades in normally
+                  renderItem(nextItem, progress);
               }
-              // 4. Glitch Shake
               else if (transitionEffect === TransitionEffect.SHAKE) {
-                  // Only shake during the middle of transition
-                  const intensity = Math.sin(progress * Math.PI); 
-                  
-                  // RGB Split effect hack: Draw multiple times with slight offset/color filter?
-                  // Canvas 2D filters "drop-shadow" can mimic glitch channels slightly but expensive.
-                  // Let's stick to shake + simple overlay.
-                  
-                  renderItem(currentItem, 1, 1, true); // Shake current
-                  
-                  // Color Dodge overlay? 
-                  ctx.globalCompositeOperation = 'lighter';
-                  renderItem(nextItem, progress, 1, true); // Shake next
-                  ctx.globalCompositeOperation = 'source-over';
+                  const shakeAmt = 10 * (1-progress);
+                  offCtx.save();
+                  offCtx.translate((Math.random()-0.5)*shakeAmt, (Math.random()-0.5)*shakeAmt);
+                  renderItem(currentItem, 1);
+                  offCtx.restore();
+                  offCtx.save();
+                  offCtx.globalCompositeOperation = 'lighter';
+                  renderItem(nextItem, progress);
+                  offCtx.restore();
               }
           }
         }
       }
     }
 
-    // Common overlay helper
+
+    // --- 2. APPLY POST PROCESS (Offscreen -> Main) ---
+    // Clears Main Canvas inside logic
+    applyPostProcessing(ctx, off, canvas.width, canvas.height, audioEnergy);
+
+
+    // --- 3. DRAW GEOMETRIC OVERLAY (On Main) ---
+    drawGeometricOverlay(ctx, canvas.width, canvas.height, audioEnergy);
+
+
+    // --- 4. DRAW UI/LYRICS ON MAIN CANVAS ---
     const drawOverlay = (opacity: number) => {
         if (opacity > 0) {
             ctx.fillStyle = `rgba(0,0,0,${opacity})`;
@@ -500,7 +904,6 @@ function App() {
         }
     };
     
-    // Determine active stage
     const isTitleActive = titleConfig.enabled && currentTime < titleConfig.duration;
     
     if (isTitleActive) {
@@ -509,8 +912,6 @@ function App() {
         drawOverlay(lyricStyle.bgOverlayOpacity);
     }
 
-
-    // -- Helper for text drawing with Effects --
     const drawTextWithEffects = (
         text: string, 
         tx: number, 
@@ -532,8 +933,6 @@ function App() {
         }
 
         ctx.font = `bold ${style.fontSize}px "${style.fontFamily}", sans-serif`;
-
-        // Pre-configure Shadow/Glow
         ctx.shadowColor = style.shadowColor;
         ctx.shadowBlur = style.shadowBlur;
 
@@ -548,50 +947,39 @@ function App() {
              if (isVertical) {
                  const chars = text.split('');
                  let currentY = 0;
-                 // Center horizontally relative to the tx line
                  ctx.textAlign = 'center';
                  ctx.textBaseline = 'middle';
                  
                  chars.forEach(char => {
-                     // Check for ASCII/Rotated characters vs CJK
-                     // Simple check: if ASCII, maybe rotate? Standard CJK is upright.
-                     // For simplicity, we draw all upright centered.
                      ctx.fillText(char, 0, currentY);
-                     currentY += style.fontSize * 1.1; // Line height
+                     currentY += style.fontSize * 1.1; 
                  });
              } else {
                  ctx.fillText(text, 0, 0);
              }
         };
 
-        // Pass 1: Optional Extra Glow (if configured)
         if (style.glowBlur > 0) {
             drawPass(style.glowColor, true);
         }
-
-        // Pass 2: Main Text
-        // Reset shadow for main text if it was changed for glow
         ctx.shadowColor = style.shadowColor;
         ctx.shadowBlur = style.shadowBlur;
         drawPass(color, false);
-
         ctx.restore();
     };
 
-    // 4. Draw Title / Credits
     if (isTitleActive) {
-        
-        // --- Calculate Title Elements ---
+        // Title Logic ...
         interface TitleElement {
             text: string;
             type: 'title' | 'subtitle' | 'credit' | 'label';
-            delay: number; // Stagger delay in seconds
+            delay: number;
             fontSizeMult: number;
         }
 
         const elements: TitleElement[] = [];
         let staggerTimer = 0;
-        const staggerStep = 0.4; // 400ms between items
+        const staggerStep = 0.4; 
 
         if (titleConfig.title) {
             elements.push({ text: titleConfig.title, type: 'title', delay: staggerTimer, fontSizeMult: 1.0 });
@@ -606,7 +994,6 @@ function App() {
             staggerTimer += staggerStep;
         }
 
-        // Combine tech credits
         const techCredits = [
             titleConfig.author ? `Lyrics: ${titleConfig.author}` : null,
             titleConfig.composer ? `Music: ${titleConfig.composer}` : null,
@@ -616,15 +1003,12 @@ function App() {
         techCredits.forEach(tc => {
             if (tc) {
                  elements.push({ text: tc, type: 'credit', delay: staggerTimer, fontSizeMult: 0.4 });
-                 staggerTimer += 0.2; // faster for list
+                 staggerTimer += 0.2; 
             }
         });
 
-        // --- Render Based on Layout ---
         const cx = canvas.width * titleStyle.positionX;
         const cy = canvas.height * titleStyle.positionY;
-
-        // Common Exit Logic
         const exitDuration = 1.0;
         const timeRemaining = titleConfig.duration - currentTime;
         let globalExitAlpha = 1;
@@ -633,42 +1017,33 @@ function App() {
         }
 
         elements.forEach((el, index) => {
-             // Calculate Local Time for Animation
              const elLocalTime = currentTime - el.delay;
-             if (elLocalTime < 0) return; // Not started yet
+             if (elLocalTime < 0) return; 
 
-             // Animation Progress (0 to 1 for entry)
              const entryDuration = 1.0;
              const progress = Math.min(1, elLocalTime / entryDuration);
-             const ease = 1 - Math.pow(1 - progress, 3); // cubic ease out
+             const ease = 1 - Math.pow(1 - progress, 3); 
 
              const currentFontSize = titleStyle.fontSize * el.fontSizeMult;
              const effectiveStyle = { ...titleStyle, fontSize: currentFontSize };
 
-             // --- Calculate Position ---
              let x = cx;
              let y = cy;
 
              if (titleConfig.layoutMode === TitleLayoutMode.CENTERED) {
                  ctx.textAlign = 'center';
                  ctx.textBaseline = 'middle';
-                 // Simple vertical stacking
-                 // Calculate offset based on index and font sizes approximately
-                 // This is a rough estimation, for perfect layout we'd measure.
                  const totalHeightEstimate = elements.reduce((acc, e) => acc + (titleStyle.fontSize * e.fontSizeMult * 1.5), 0);
                  const startY = cy - (totalHeightEstimate / 2);
-                 
                  let yOffset = 0;
                  for(let i=0; i<index; i++) {
                      yOffset += titleStyle.fontSize * elements[i].fontSizeMult * 1.5;
                  }
-                 y = startY + yOffset + (titleStyle.fontSize * el.fontSizeMult / 2); // Center of line
+                 y = startY + yOffset + (titleStyle.fontSize * el.fontSizeMult / 2); 
 
              } else if (titleConfig.layoutMode === TitleLayoutMode.VERTICAL_RIGHT) {
-                 // Right to left stacking
                  const totalWidthEstimate = elements.reduce((acc, e) => acc + (titleStyle.fontSize * e.fontSizeMult * 1.5), 0);
                  const startX = cx + (totalWidthEstimate / 2);
-
                  let xOffset = 0;
                  for(let i=0; i<index; i++) {
                      xOffset += titleStyle.fontSize * elements[i].fontSizeMult * 1.5;
@@ -677,21 +1052,17 @@ function App() {
                  y = cy - (currentFontSize * el.text.length * 1.1 / 2);
 
              } else if (titleConfig.layoutMode === TitleLayoutMode.CINEMATIC) {
-                 // Title Huge Center, Subtitle below, Credits at bottom spread
                  ctx.textAlign = 'center';
                  ctx.textBaseline = 'middle';
-
                  if (el.type === 'title') {
                      y = cy - 40;
                  } else if (el.type === 'subtitle') {
                      y = cy + currentFontSize;
                  } else {
-                     // Push credits to bottom
                      y = canvas.height * 0.85 + (index - 2) * currentFontSize * 1.5;
                  }
              }
 
-             // --- Apply Effects ---
              let alpha = globalExitAlpha;
              let scale = 1;
              let yAnimOffset = 0;
@@ -700,21 +1071,17 @@ function App() {
                  alpha *= ease;
                  yAnimOffset = (1 - ease) * 50;
                  if (titleConfig.layoutMode === TitleLayoutMode.VERTICAL_RIGHT) {
-                      yAnimOffset = 0; // Don't slide vertical text up, maybe slide opacity only or slide left?
-                      // Let's slide left for vertical
+                      yAnimOffset = 0; 
                       x += (1-ease) * 30;
                  } else {
                      y += yAnimOffset;
                  }
              } else if (titleStyle.animationEffect === LyricEffect.TYPEWRITER) {
-                 // Typewriter Logic
                  const charCount = el.text.length;
                  const typeDuration = 1.5; 
                  const visibleChars = Math.floor(charCount * Math.min(1, elLocalTime / typeDuration));
-                 // Mutate text for display
                  el.text = el.text.substring(0, visibleChars);
              } else if (titleStyle.animationEffect === LyricEffect.SCATTER) {
-                 // Entrance scatter? Or simple fade
                  alpha *= ease;
                  scale = 0.5 + ease * 0.5;
              } else {
@@ -722,20 +1089,12 @@ function App() {
              }
 
              drawTextWithEffects(
-                 el.text, 
-                 x, 
-                 y, 
-                 effectiveStyle, 
-                 titleStyle.activeColor, 
-                 alpha, 
-                 scale, 
-                 0, 
+                 el.text, x, y, effectiveStyle, titleStyle.activeColor, alpha, scale, 0, 
                  titleConfig.layoutMode === TitleLayoutMode.VERTICAL_RIGHT
              );
         });
 
     } 
-    // 5. Draw Lyrics
     else if (lrcLines.length > 0) {
       const activeIndex = lrcLines.findIndex((line, i) => {
         const nextLine = lrcLines[i + 1];
@@ -748,56 +1107,42 @@ function App() {
       const x = canvas.width * lyricStyle.positionX;
       const baseY = canvas.height * lyricStyle.positionY;
 
-      // -- Draw Active Line --
       if (activeIndex !== -1) {
           const line = lrcLines[activeIndex];
           const nextLineTime = lrcLines[activeIndex + 1]?.time || (line.time + 5);
           const duration = nextLineTime - line.time;
           const progress = Math.max(0, Math.min(1, (currentTime - line.time) / duration));
 
-          // Effect Logic
           if (lyricStyle.animationEffect === LyricEffect.FADE_UP) {
-              const entryDuration = 0.5; // seconds
+              const entryDuration = 0.5;
               const entryProgress = Math.min(1, (currentTime - line.time) / entryDuration);
-              const ease = 1 - Math.pow(1 - entryProgress, 3); // easeOutCubic
-              
-              const yOffset = (1 - ease) * 30; // Slide up 30px
-              const opacity = ease;
-              drawTextWithEffects(line.text, x, baseY + yOffset, lyricStyle, lyricStyle.activeColor, opacity);
-
+              const ease = 1 - Math.pow(1 - entryProgress, 3);
+              const yOffset = (1 - ease) * 30;
+              drawTextWithEffects(line.text, x, baseY + yOffset, lyricStyle, lyricStyle.activeColor, ease);
           } else if (lyricStyle.animationEffect === LyricEffect.TYPEWRITER) {
               const charCount = line.text.length;
               const typeDuration = Math.min(duration * 0.8, 2); 
               const visibleChars = Math.floor(charCount * Math.min(1, (currentTime - line.time) / typeDuration));
               const textToShow = line.text.substring(0, visibleChars);
               drawTextWithEffects(textToShow, x, baseY, lyricStyle, lyricStyle.activeColor);
-
           } else if (lyricStyle.animationEffect === LyricEffect.KARAOKE) {
-              // 1. Draw Inactive base
               drawTextWithEffects(line.text, x, baseY, lyricStyle, lyricStyle.fontColor);
-              
-              // 2. Draw Active Overlay with Clip
               ctx.save();
               ctx.beginPath();
               ctx.font = `bold ${lyricStyle.fontSize}px "${lyricStyle.fontFamily}", sans-serif`;
               const textWidth = ctx.measureText(line.text).width;
-              
               const clipWidth = textWidth * progress;
               const startX = x - (textWidth / 2);
-              
               ctx.rect(startX, baseY - lyricStyle.fontSize, clipWidth, lyricStyle.fontSize * 2);
               ctx.clip();
-              
               drawTextWithEffects(line.text, x, baseY, lyricStyle, lyricStyle.activeColor);
               ctx.restore();
-
           } else if (lyricStyle.animationEffect === LyricEffect.BREATHING) {
-              const pulse = (Math.sin(currentTime * 3) + 1) / 2; // 0 to 1
-              const scale = 1 + (pulse * 0.05); // 1.0 to 1.05
+              const pulse = (Math.sin(currentTime * 3) + 1) / 2; 
+              const scale = 1 + (pulse * 0.05); 
               const styleCopy = {...lyricStyle};
               styleCopy.glowBlur = lyricStyle.glowBlur + (pulse * 10);
               drawTextWithEffects(line.text, x, baseY, styleCopy, lyricStyle.activeColor, 1, scale);
-
           } else if (lyricStyle.animationEffect === LyricEffect.SCATTER) {
               const scatterStart = 0.8;
               if (progress < scatterStart) {
@@ -809,19 +1154,15 @@ function App() {
                    const blur = scatterProgress * 10;
                    drawTextWithEffects(line.text, x, baseY, lyricStyle, lyricStyle.activeColor, opacity, scale, blur);
               }
-
           } else {
               drawTextWithEffects(line.text, x, baseY, lyricStyle, lyricStyle.activeColor);
           }
 
-          // Draw next line (preview)
           if (activeIndex + 1 < lrcLines.length) {
               const nextLine = lrcLines[activeIndex + 1];
               const previewStyle = {...lyricStyle, fontSize: lyricStyle.fontSize * 0.7 };
               drawTextWithEffects(nextLine.text, x, baseY + lyricStyle.fontSize * 1.5, previewStyle, lyricStyle.fontColor);
           }
-          
-           // Draw prev line
           if (activeIndex - 1 >= 0) {
               const prevLine = lrcLines[activeIndex - 1];
               const prevStyle = {...lyricStyle, fontSize: lyricStyle.fontSize * 0.7 };
@@ -829,7 +1170,6 @@ function App() {
           }
 
       } else {
-        // No active line found (intro)
         if (lrcLines.length > 0 && currentTime < lrcLines[0].time) {
              const previewStyle = {...lyricStyle, fontSize: lyricStyle.fontSize * 0.8 };
              drawTextWithEffects(lrcLines[0].text, x, baseY + lyricStyle.fontSize * 1.5, previewStyle, lyricStyle.fontColor);
@@ -838,7 +1178,7 @@ function App() {
       }
     }
 
-  }, [backgrounds, currentTime, lrcLines, lyricStyle, titleStyle, titleConfig, isPlaying, transitionEffect, transitionDuration, drawScaledMedia]);
+  }, [backgrounds, currentTime, lrcLines, lyricStyle, titleStyle, titleConfig, isPlaying, transitionEffect, transitionDuration, visualizerConfig, drawScaledMedia, applyPostProcessing, drawGeometricOverlay]);
 
   // --- Animation Loop ---
   useEffect(() => {
@@ -863,7 +1203,7 @@ function App() {
       const { width, height } = getResolution(aspectRatio);
       canvasRef.current.width = width;
       canvasRef.current.height = height;
-      drawCanvas(); // Force redraw on resize
+      drawCanvas(); 
     }
   }, [aspectRatio, drawCanvas]);
 
@@ -871,9 +1211,9 @@ function App() {
   // --- Controls ---
   const togglePlay = () => {
     if (audioRef.current) {
+      setupAudioContext();
       if (isPlaying) {
         audioRef.current.pause();
-        // Pause all background videos
         videoElementsRef.current.forEach(v => v.pause());
       } else {
         audioRef.current.play();
@@ -893,33 +1233,32 @@ function App() {
   // --- Recording Logic ---
   const startRecording = () => {
      if (!canvasRef.current || !audioRef.current) return;
-     
      if (!isPlaying) togglePlay();
-
-     // Capture streams
-     const canvasStream = canvasRef.current.captureStream(30); // 30 FPS
+     const canvasStream = canvasRef.current.captureStream(30); 
      let combinedStream = canvasStream;
      
-     // Try to get audio track
      try {
-         // @ts-ignore
-         if (audioRef.current.captureStream) {
-             // @ts-ignore
-             const audioStream = audioRef.current.captureStream();
-             const audioTrack = audioStream.getAudioTracks()[0];
-             if (audioTrack) {
-                 combinedStream.addTrack(audioTrack);
+         if (audioContextRef.current) {
+             const dest = audioContextRef.current.createMediaStreamDestination();
+             if (sourceNodeRef.current) {
+                 sourceNodeRef.current.connect(dest);
+                 const audioTrack = dest.stream.getAudioTracks()[0];
+                 if (audioTrack) combinedStream.addTrack(audioTrack);
              }
-         } else if ((audioRef.current as any).mozCaptureStream) {
-             const audioStream = (audioRef.current as any).mozCaptureStream();
-             const audioTrack = audioStream.getAudioTracks()[0];
-              if (audioTrack) {
-                 combinedStream.addTrack(audioTrack);
-             }
+         } else {
+              // @ts-ignore
+              if (audioRef.current.captureStream) {
+                  // @ts-ignore
+                  const audioStream = audioRef.current.captureStream();
+                  combinedStream.addTrack(audioStream.getAudioTracks()[0]);
+              } else if ((audioRef.current as any).mozCaptureStream) {
+                  const audioStream = (audioRef.current as any).mozCaptureStream();
+                  combinedStream.addTrack(audioStream.getAudioTracks()[0]);
+              }
          }
      } catch (e) {
          console.error("Could not capture audio stream", e);
-         alert("Audio capture failed. Ensure you are using a modern browser (Chrome/Firefox).");
+         alert("Audio capture failed.");
      }
 
      const recorder = new MediaRecorder(combinedStream, {
@@ -949,7 +1288,6 @@ function App() {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
           mediaRecorderRef.current.stop();
           setIsRecording(false);
-          // Pause playback when recording stops (UX choice: keeps user at end of segment)
           if (isPlaying) togglePlay(); 
       }
   };
@@ -957,10 +1295,10 @@ function App() {
 
   return (
     <div className="flex h-screen w-full bg-black text-white">
-      {/* Hidden Audio Element */}
       <audio 
         ref={audioRef} 
         src={audioSrc || undefined} 
+        crossOrigin="anonymous" 
         onEnded={() => {
             setIsPlaying(false);
             if (isRecording) stopRecording();
@@ -1014,6 +1352,9 @@ function App() {
         transitionDuration={transitionDuration}
         setTransitionDuration={setTransitionDuration}
 
+        visualizerConfig={visualizerConfig}
+        setVisualizerConfig={setVisualizerConfig}
+
         audioFileName={audioFile?.name}
         onOpenLyricEditor={() => {
              if (!audioSrc) {
@@ -1029,7 +1370,6 @@ function App() {
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-         {/* Top Toolbar */}
          <div className="h-14 border-b border-gray-800 flex items-center justify-between px-6 bg-gray-900">
             <div className="flex items-center gap-4">
                {!audioSrc && <span className="text-gray-500 text-sm flex items-center gap-2"><AlertCircle size={16}/> Start by uploading an MP3</span>}
@@ -1053,7 +1393,6 @@ function App() {
             </div>
          </div>
 
-         {/* Main Canvas Area */}
          <div className="flex-1 bg-gray-950 flex items-center justify-center p-8 overflow-hidden relative">
              <div 
                className="shadow-2xl border border-gray-800 relative"
@@ -1072,7 +1411,6 @@ function App() {
              </div>
          </div>
 
-         {/* Timeline Controls */}
          <div className="h-20 bg-gray-900 border-t border-gray-800 px-6 flex items-center gap-4">
             <button 
                 onClick={togglePlay} 
