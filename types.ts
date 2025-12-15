@@ -47,7 +47,8 @@ export enum OverlayType {
   CIRCULAR_SPECTRUM = 'circular_spectrum', 
   WAVE_RING = 'wave_ring',                 
   STAR_FIELD = 'star_field',
-  PARTICLE_TUNNEL = 'particle_tunnel', // New Geometric Tunnel
+  PARTICLE_TUNNEL = 'particle_tunnel',
+  PARTICLE_CLOUD = 'particle_cloud', // New Audio Cloud
   CLASSIC_BARS = 'classic_bars',
 }
 

@@ -261,8 +261,9 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                         <option value={OverlayType.NONE}>None</option>
                         <option value={OverlayType.CIRCULAR_SPECTRUM}>⭕ Circular Spectrum</option>
                         <option value={OverlayType.WAVE_RING}>〰️ Waveform Ring</option>
-                        <option value={OverlayType.STAR_FIELD}>🌌 Star Field (3D)</option>
+                        <option value={OverlayType.PARTICLE_CLOUD}>☁️ Audio Cloud</option>
                         <option value={OverlayType.PARTICLE_TUNNEL}>🌀 Geometric Tunnel</option>
+                        <option value={OverlayType.STAR_FIELD}>🌌 Star Field (3D)</option>
                         <option value={OverlayType.CLASSIC_BARS}>📊 Classic Bars</option>
                     </select>
                 </div>

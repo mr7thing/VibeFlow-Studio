@@ -113,7 +113,8 @@ function App() {
   
   // Visualizer Refs
   const particlesRef = useRef<{x: number, y: number, z: number}[]>([]);
-  const tunnelRef = useRef({ zOffset: 0, rotation: 0 }); // New ref for tunnel state
+  const cloudParticlesRef = useRef<{theta: number, phi: number}[]>([]);
+  const tunnelRef = useRef({ zOffset: 0, rotation: 0 }); // New ref for tunnel/cloud state
   
   // Hidden video elements cache for background videos
   const videoElementsRef = useRef<Map<string, HTMLVideoElement>>(new Map());
@@ -531,17 +532,13 @@ function App() {
         // Draw Rings
         for (let i = 0; i < numRings; i++) {
             const z = maxDepth - (i * ringSpacing) - tunnelRef.current.zOffset;
-            
-            // Perspective Projection
             const fov = 300;
             const scale = fov / (fov + z); // Standard 3D projection
             if (scale <= 0) continue;
 
-            const alpha = (z / maxDepth); // Fade out as it gets deeper? Or fade out as it gets closer? 
-            // Let's fade out at the back (z=1000) and full opacity near camera (z=0)
+            const alpha = (z / maxDepth); 
             ctx.globalAlpha = (1 - (z/maxDepth)) * opacity;
             
-            // Calculate radius based on z (perspective) but also Audio
             const baseRadius = Math.min(width, height) * 0.8;
             const r = baseRadius * scale * (1 + (bassKick * 0.2));
 
@@ -585,6 +582,67 @@ function App() {
                  ctx.lineWidth = 2 * sensitivity; // Reset for main rings
             }
         }
+     }
+     else if (type === OverlayType.PARTICLE_CLOUD) {
+        // Audio Cloud
+        const numParticles = 300;
+        
+        // Lazy init cloud particles
+        if (cloudParticlesRef.current.length < numParticles) {
+            for(let i=cloudParticlesRef.current.length; i<numParticles; i++) {
+                cloudParticlesRef.current.push({
+                    theta: Math.random() * Math.PI * 2,
+                    phi: Math.acos((Math.random() * 2) - 1),
+                });
+            }
+        }
+
+        const data = frequencyDataRef.current || new Uint8Array(1024);
+        
+        // Use rotation state from shared tunnelRef
+        tunnelRef.current.rotation += 0.005 + (energy.mid/255 * 0.01 * sensitivity);
+        const rotationX = tunnelRef.current.rotation;
+        const rotationY = tunnelRef.current.rotation * 0.6; // slightly different speed
+
+        const fov = 300;
+        
+        cloudParticlesRef.current.forEach((p, i) => {
+            // Audio Reactivity
+            // Map particle index to frequency bin
+            const freqVal = data[i % data.length];
+            const audioBoost = (freqVal / 255) * sensitivity;
+            
+            // Radius expands with bass/audio
+            const baseRadius = Math.min(width, height) * 0.3;
+            const r = baseRadius + (audioBoost * 100);
+
+            // Spherical to Cartesian
+            let x = r * Math.sin(p.phi) * Math.cos(p.theta);
+            let y = r * Math.sin(p.phi) * Math.sin(p.theta);
+            let z = r * Math.cos(p.phi);
+
+            // Rotation Matrix (Rotate around Y then X)
+            // Rotate Y
+            let x1 = x * Math.cos(rotationX) - z * Math.sin(rotationX);
+            let z1 = x * Math.sin(rotationX) + z * Math.cos(rotationX);
+            // Rotate X
+            let y1 = y * Math.cos(rotationY) - z1 * Math.sin(rotationY);
+            let z2 = y * Math.sin(rotationY) + z1 * Math.cos(rotationY);
+
+            // Projection
+            const scale = fov / (fov + z2 + baseRadius); 
+            const x2d = cx + x1 * scale;
+            const y2d = cy + y1 * scale;
+            
+            const size = (2 + (audioBoost * 8)) * scale;
+            const alpha = 0.5 + (audioBoost * 0.5);
+
+            ctx.globalAlpha = alpha * opacity;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x2d, y2d, size, 0, Math.PI * 2);
+            ctx.fill();
+        });
      }
      else if (type === OverlayType.CLASSIC_BARS) {
          if (frequencyDataRef.current) {
